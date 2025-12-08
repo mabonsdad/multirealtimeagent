@@ -179,8 +179,10 @@ function App() {
   }, [isPTTActive]);
 
   const fetchEphemeralKey = async (): Promise<string | null> => {
-    logClientEvent({ url: "/session" }, "fetch_session_token_request");
-    const tokenResponse = await fetch("/api/session");
+    const sessionUrl =
+      process.env.NEXT_PUBLIC_SESSION_ENDPOINT || "/api/session";
+    logClientEvent({ url: sessionUrl }, "fetch_session_token_request");
+    const tokenResponse = await fetch(sessionUrl);
     const data = await tokenResponse.json();
     logServerEvent(data, "fetch_session_token_response");
 
