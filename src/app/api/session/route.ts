@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
 export async function GET() {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey =
+    process.env.OPENAI_API_KEY_2 || process.env.OPENAI_API_KEY || "";
 
   if (!apiKey) {
     console.error(
