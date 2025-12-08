@@ -15,7 +15,7 @@ export async function GET() {
     process.env.OPENAI_API_KEY_2 || process.env.OPENAI_API_KEY || "";
 
   if (!apiKey) {
-    console.error("OPENAI_API_KEYS are not set; cannot create realtime session.", {
+    console.error("OPENAI_API_KEY is not set; cannot create realtime session.", {
       presentEnvKeys,
     });
     return NextResponse.json(
