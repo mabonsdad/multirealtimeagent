@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 
+// Force this route to run in a Node.js runtime (not edge) so server env vars are available.
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const apiKey =
     process.env.OPENAI_API_KEY_2 || process.env.OPENAI_API_KEY || "";
