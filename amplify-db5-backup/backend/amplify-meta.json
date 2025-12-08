@@ -1,0 +1,16 @@
+{
+  "providers": {
+    "awscloudformation": {
+      "AuthRoleName": "amplify-multirealtimeagents-multiagent-30386-authRole",
+      "UnauthRoleArn": "arn:aws:iam::528323923790:role/amplify-multirealtimeagents-multiagent-30386-unauthRole",
+      "AuthRoleArn": "arn:aws:iam::528323923790:role/amplify-multirealtimeagents-multiagent-30386-authRole",
+      "Region": "eu-west-1",
+      "DeploymentBucketName": "amplify-multirealtimeagents-multiagent-30386-deployment",
+      "UnauthRoleName": "amplify-multirealtimeagents-multiagent-30386-unauthRole",
+      "StackName": "amplify-multirealtimeagents-multiagent-30386",
+      "StackId": "arn:aws:cloudformation:eu-west-1:528323923790:stack/amplify-multirealtimeagents-multiagent-30386/f55920a0-d3ac-11f0-8ad2-06702c38f14b",
+      "AmplifyAppId": "db5pikf8znast"
+    }
+  },
+  "hosting": {}
+}

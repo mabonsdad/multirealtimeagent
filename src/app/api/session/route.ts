@@ -4,7 +4,14 @@ export async function GET() {
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
-    console.error("OPENAI_API_KEY is not set; cannot create realtime session.");
+    console.error(
+      "OPENAI_API_KEY is not set; cannot create realtime session.",
+      {
+        presentEnvKeys: Object.keys(process.env).filter((k) =>
+          k.toUpperCase().includes("OPENAI")
+        ),
+      }
+    );
     return NextResponse.json(
       { error: "Server is missing OPENAI_API_KEY" },
       { status: 500 }
