@@ -31,14 +31,6 @@
       "StackName": "amplify-multirealtimeagents-multiagent-30386",
       "StackId": "arn:aws:cloudformation:eu-west-1:528323923790:stack/amplify-multirealtimeagents-multiagent-30386/f55920a0-d3ac-11f0-8ad2-06702c38f14b",
       "AmplifyAppId": "db5pikf8znast"
-    },
-    "categories": {
-      "hosting": {
-        "amplifyhosting": {
-          "appId": "db5pikf8znast",
-          "type": "manual"
-        }
-      }
     }
   }
 }
