@@ -5,11 +5,25 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const envSecrets =
-    (process as any).env?.secrets ||
-    (process as any).secrets ||
-    (process.env as any)?.secrets ||
-    {};
+  const rawSecrets =
+    typeof process.env.secrets === "string" ? process.env.secrets : "";
+
+  let parsedSecrets: Record<string, string> = {};
+  if (rawSecrets) {
+    try {
+      parsedSecrets = JSON.parse(rawSecrets);
+    } catch (err) {
+      console.error("Failed to parse process.env.secrets JSON", err);
+    }
+  }
+
+  // Collect possible secret sources: parsed JSON string, and any injected objects.
+  const envSecrets = {
+    ...parsedSecrets,
+    ...((process as any).env?.secrets || {}),
+    ...((process as any).secrets || {}),
+    ...((process.env as any)?.secrets || {}),
+  };
 
   const presentEnvKeys = [
     ...Object.keys(process.env || {}),
