@@ -1,11 +1,24 @@
-import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import { NextRequest, NextResponse } from "next/server";
+import OpenAI from "openai";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 // Proxy endpoint for the OpenAI Responses API
 export async function POST(req: NextRequest) {
   const body = await req.json();
 
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const rawSecrets =
+    typeof process.env.secrets === "string" ? process.env.secrets : "{}";
+  let secrets: Record<string, string> = {};
+  try {
+    secrets = JSON.parse(rawSecrets);
+  } catch (err) {
+    console.error("Failed to parse process.env.secrets JSON", err);
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY || secrets.OPENAI_API_KEY || "";
+  const openai = new OpenAI({ apiKey });
 
   if (body.text?.format?.type === 'json_schema') {
     return await structuredResponse(openai, body);
