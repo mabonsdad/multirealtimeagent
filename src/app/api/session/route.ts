@@ -6,35 +6,46 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const rawSecrets =
-    typeof process.env.secrets === "string" ? process.env.secrets : "{}";
+    typeof process.env.secrets === "string" ? process.env.secrets : "";
 
-  let secrets: Record<string, string> = {};
-  try {
-    secrets = JSON.parse(rawSecrets);
-  } catch (err) {
-    console.error("Failed to parse process.env.secrets JSON", err);
+  let parsedSecrets: Record<string, string> = {};
+  if (rawSecrets) {
+    try {
+      parsedSecrets = JSON.parse(rawSecrets);
+    } catch (err) {
+      console.error("Failed to parse process.env.secrets JSON", err);
+    }
   }
 
-  const envSecrets = secrets || {};
-  console.log("[/api/session] rawSecrets length", rawSecrets.length || 0);
-  console.log("[/api/session] envSecrets keys", Object.keys(envSecrets || {}));
-  console.log(
-    "[/api/session] env OPENAI keys",
-    Object.keys(process.env || {}).filter((k) => k.toUpperCase().includes("OPENAI"))
+  const envSecrets = {
+    ...parsedSecrets,
+    ...((process as any).env?.secrets || {}),
+    ...((process as any).secrets || {}),
+    ...((process.env as any)?.secrets || {}),
+  };
+
+  const envOpenAiKeys = Object.keys(process.env || {}).filter((k) =>
+    k.toUpperCase().includes("OPENAI")
+  );
+  const secretOpenAiKeys = Object.keys(envSecrets || {}).filter((k) =>
+    k.toUpperCase().includes("OPENAI")
   );
 
-  const presentEnvKeys = [
-    ...Object.keys(process.env || {}),
-    ...Object.keys(secrets || {}),
-  ].filter((k) => k.toUpperCase().includes("OPENAI"));
+  console.log("[/api/session] debug", {
+    rawSecretsLength: rawSecrets.length,
+    envOpenAiKeys,
+    secretOpenAiKeys,
+  });
+
+  const presentEnvKeys = [...envOpenAiKeys, ...secretOpenAiKeys];
 
   console.log("[/api/session] invoked", { presentEnvKeys });
 
   const apiKey =
     process.env.OPENAI_API_KEY ||
+    envSecrets.OPENAI_API_KEY ||
     process.env.OPENAI_API_KEY_2 ||
-    secrets.OPENAI_API_KEY ||
-    secrets.OPENAI_API_KEY_2 ||
+    envSecrets.OPENAI_API_KEY_2 ||
     "";
 
   if (!apiKey) {
