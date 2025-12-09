@@ -23,13 +23,19 @@ export async function GET() {
     Object.keys(process.env || {}).filter((k) => k.toUpperCase().includes("OPENAI"))
   );
 
-  const presentEnvKeys = Object.keys(secrets || {}).filter((k) =>
-    k.toUpperCase().includes("OPENAI")
-  );
+  const presentEnvKeys = [
+    ...Object.keys(process.env || {}),
+    ...Object.keys(secrets || {}),
+  ].filter((k) => k.toUpperCase().includes("OPENAI"));
 
   console.log("[/api/session] invoked", { presentEnvKeys });
 
-  const apiKey = secrets.OPENAI_API_KEY || secrets.OPENAI_API_KEY_2 || "";
+  const apiKey =
+    process.env.OPENAI_API_KEY ||
+    process.env.OPENAI_API_KEY_2 ||
+    secrets.OPENAI_API_KEY ||
+    secrets.OPENAI_API_KEY_2 ||
+    "";
 
   if (!apiKey) {
     console.error("OPENAI_API_KEY is not set; cannot create realtime session.", {
