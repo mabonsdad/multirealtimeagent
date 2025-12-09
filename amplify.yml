@@ -1,22 +1,20 @@
 version: 1
-applications:
-  - appRoot: .
-    backend:
-      phases:
-        build:
-          commands: [] # Skip amplifyPull/legacy backend steps; hosting-only.
-    frontend:
-      phases:
-        preBuild:
-          commands:
-            - npm ci
-        build:
-          commands:
-            - npm run build
-      artifacts:
-        baseDirectory: .next
-        files:
-          - "**/*"
-      cache:
-        paths:
-          - node_modules/**/*
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - npm ci
+    build:
+      commands:
+        # Make OPENAI_API_KEY available to Next.js server runtime
+        - env | grep -e OPENAI_API_KEY >> .env.production
+        - npm run build
+  artifacts:
+    baseDirectory: .next
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*
+      - .next/cache/**/*
+
