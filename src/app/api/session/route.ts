@@ -15,6 +15,14 @@ export async function GET() {
     console.error("Failed to parse process.env.secrets JSON", err);
   }
 
+  const envSecrets = secrets || {};
+  console.log("[/api/session] rawSecrets length", rawSecrets.length || 0);
+  console.log("[/api/session] envSecrets keys", Object.keys(envSecrets || {}));
+  console.log(
+    "[/api/session] env OPENAI keys",
+    Object.keys(process.env || {}).filter((k) => k.toUpperCase().includes("OPENAI"))
+  );
+
   const presentEnvKeys = Object.keys(secrets || {}).filter((k) =>
     k.toUpperCase().includes("OPENAI")
   );
