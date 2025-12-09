@@ -8,47 +8,25 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   const body = await req.json();
 
-  const rawSecrets =
-    typeof process.env.secrets === "string" ? process.env.secrets : "";
-
-  let parsedSecrets: Record<string, string> = {};
-  if (rawSecrets) {
-    try {
-      parsedSecrets = JSON.parse(rawSecrets);
-    } catch (err) {
-      console.error("Failed to parse process.env.secrets JSON", err);
-    }
-  }
-
-  const envSecrets = {
-    ...parsedSecrets,
-    ...((process as any).env?.secrets || {}),
-    ...((process as any).secrets || {}),
-    ...((process.env as any)?.secrets || {}),
-  };
-
   const envOpenAiKeys = Object.keys(process.env || {}).filter((k) =>
     k.toUpperCase().includes("OPENAI")
   );
-  const secretOpenAiKeys = Object.keys(envSecrets || {}).filter((k) =>
-    k.toUpperCase().includes("OPENAI")
-  );
 
-  console.log("[/api/responses] debug", {
-    rawSecretsLength: rawSecrets.length,
-    envOpenAiKeys,
-    secretOpenAiKeys,
-  });
+  console.log("[/api/responses] debug", { envOpenAiKeys });
 
-  const apiKey =
-    process.env.OPENAI_API_KEY ||
-    envSecrets.OPENAI_API_KEY ||
-    process.env.OPENAI_API_KEY_2 ||
-    envSecrets.OPENAI_API_KEY_2 ||
-    "";
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    console.error("OPENAI_API_KEY missing for /api/responses", { envOpenAiKeys });
+    return NextResponse.json(
+      { error: "Server is missing OPENAI_API_KEY" },
+      { status: 500 }
+    );
+  }
+
   const openai = new OpenAI({ apiKey });
 
-  if (body.text?.format?.type === 'json_schema') {
+  if (body.text?.format?.type === "json_schema") {
     return await structuredResponse(openai, body);
   } else {
     return await textResponse(openai, body);
@@ -64,8 +42,8 @@ async function structuredResponse(openai: OpenAI, body: any) {
 
     return NextResponse.json(response);
   } catch (err: any) {
-    console.error('responses proxy error', err);
-    return NextResponse.json({ error: 'failed' }, { status: 500 }); 
+    console.error("[/api/responses] structured response error", err);
+    return NextResponse.json({ error: "failed" }, { status: 500 });
   }
 }
 
@@ -78,8 +56,7 @@ async function textResponse(openai: OpenAI, body: any) {
 
     return NextResponse.json(response);
   } catch (err: any) {
-    console.error('responses proxy error', err);
-    return NextResponse.json({ error: 'failed' }, { status: 500 });
+    console.error("[/api/responses] text response error", err);
+    return NextResponse.json({ error: "failed" }, { status: 500 });
   }
 }
-  

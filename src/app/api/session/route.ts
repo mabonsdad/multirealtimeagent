@@ -1,59 +1,26 @@
 import { NextResponse } from "next/server";
 
-// Force this route to run in a Node.js runtime (not edge) so server env vars are available.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const rawSecrets =
-    typeof process.env.secrets === "string" ? process.env.secrets : "";
-
-  let parsedSecrets: Record<string, string> = {};
-  if (rawSecrets) {
-    try {
-      parsedSecrets = JSON.parse(rawSecrets);
-    } catch (err) {
-      console.error("Failed to parse process.env.secrets JSON", err);
-    }
-  }
-
-  const envSecrets = {
-    ...parsedSecrets,
-    ...((process as any).env?.secrets || {}),
-    ...((process as any).secrets || {}),
-    ...((process.env as any)?.secrets || {}),
-  };
-
   const envOpenAiKeys = Object.keys(process.env || {}).filter((k) =>
-    k.toUpperCase().includes("OPENAI")
-  );
-  const secretOpenAiKeys = Object.keys(envSecrets || {}).filter((k) =>
     k.toUpperCase().includes("OPENAI")
   );
 
   console.log("[/api/session] debug", {
-    rawSecretsLength: rawSecrets.length,
     envOpenAiKeys,
-    secretOpenAiKeys,
   });
 
-  const presentEnvKeys = [...envOpenAiKeys, ...secretOpenAiKeys];
-
-  console.log("[/api/session] invoked", { presentEnvKeys });
-
   const apiKey =
-    process.env.OPENAI_API_KEY ||
-    envSecrets.OPENAI_API_KEY ||
-    process.env.OPENAI_API_KEY_2 ||
-    envSecrets.OPENAI_API_KEY_2 ||
-    "";
+    process.env.OPENAI_API_KEY || "";
 
   if (!apiKey) {
-    console.error("OPENAI_API_KEY is not set; cannot create realtime session.", {
-      presentEnvKeys,
+    console.error("OPENAI_API_KEY is unfortunately not set; cannot create realtime session.", {
+      envOpenAiKeys,
     });
     return NextResponse.json(
-      { error: "Server is missing OPENAI_API_KEY", presentEnvKeys },
+      { error: "Server is missing OPENAI_API_KEY", envOpenAiKeys },
       { status: 500 }
     );
   }
@@ -96,6 +63,7 @@ export async function GET() {
         { status: 502 }
       );
     }
+
     return NextResponse.json(data);
   } catch (error) {
     console.error("Error in /session:", error);
