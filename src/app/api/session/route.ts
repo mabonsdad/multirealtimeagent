@@ -5,14 +5,25 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const presentEnvKeys = Object.keys(process.env).filter((k) =>
-    k.toUpperCase().includes("OPENAI")
-  );
+  const envSecrets =
+    (process as any).env?.secrets ||
+    (process as any).secrets ||
+    (process.env as any)?.secrets ||
+    {};
+
+  const presentEnvKeys = [
+    ...Object.keys(process.env || {}),
+    ...Object.keys(envSecrets || {}),
+  ].filter((k) => k.toUpperCase().includes("OPENAI"));
 
   console.log("[/api/session] invoked", { presentEnvKeys });
 
   const apiKey =
-    process.env.OPENAI_API_KEY_2 || process.env.OPENAI_API_KEY || "";
+    process.env.OPENAI_API_KEY_2 ||
+    process.env.OPENAI_API_KEY ||
+    envSecrets.OPENAI_API_KEY_2 ||
+    envSecrets.OPENAI_API_KEY ||
+    "";
 
   if (!apiKey) {
     console.error("OPENAI_API_KEY is not set; cannot create realtime session.", {
