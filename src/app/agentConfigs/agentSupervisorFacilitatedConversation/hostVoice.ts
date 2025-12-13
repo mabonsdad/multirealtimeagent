@@ -81,7 +81,7 @@ All tools are used silently behind the scenes.
         additionalProperties: false,
       },
       async execute(input: any) {
-        const { conversation_summary, last_user_utterance } = input as {
+        const { conversation_summary } = input as {
           conversation_summary: string;
           last_user_utterance: string;
         };

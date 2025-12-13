@@ -176,7 +176,7 @@ function useAudioDownload() {
       if (currentRecorderRef.current.state === "recording") {
         try {
           currentRecorderRef.current.requestData();
-        } catch (err) {
+        } catch {
           // Swallow if already inactive.
         }
         currentRecorderRef.current.stop();
@@ -188,7 +188,7 @@ function useAudioDownload() {
       if (mediaRecorderRef.current.state === "recording") {
         try {
           mediaRecorderRef.current.requestData();
-        } catch (err) {
+        } catch {
           // ignore
         }
         mediaRecorderRef.current.stop();
