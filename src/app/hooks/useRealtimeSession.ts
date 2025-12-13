@@ -16,7 +16,7 @@ export interface RealtimeSessionCallbacks {
 }
 
 export interface ConnectOptions {
-  getEphemeralKey: () => Promise<string>;
+  getEphemeralKey: () => Promise<string | null>;
   initialAgents: RealtimeAgent[];
   audioElement?: HTMLAudioElement;
   extraContext?: Record<string, any>;
@@ -122,7 +122,11 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
 
       updateStatus('CONNECTING');
 
-      const ek = await getEphemeralKey();
+      const ek = (await getEphemeralKey())?.trim();
+      if (!ek) {
+        updateStatus('DISCONNECTED');
+        throw new Error('Missing ephemeral key; cannot start realtime session');
+      }
       const rootAgent = initialAgents[0];
 
       sessionRef.current = new RealtimeSession(rootAgent, {

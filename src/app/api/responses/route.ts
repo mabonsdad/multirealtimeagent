@@ -1,62 +1,66 @@
-import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
+import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Proxy endpoint for the OpenAI Responses API
-export async function POST(req: NextRequest) {
-  const body = await req.json();
-
-  const envOpenAiKeys = Object.keys(process.env || {}).filter((k) =>
-    k.toUpperCase().includes("OPENAI")
-  );
-
-  console.log("[/api/responses] debug", { envOpenAiKeys });
-
-  const apiKey = process.env.OPENAI_API_KEY;
+export async function POST(req: Request) {
+  const apiKey = process.env.OPENAI_API_KEY || "";
 
   if (!apiKey) {
-    console.error("OPENAI_API_KEY missing for /api/responses", { envOpenAiKeys });
     return NextResponse.json(
       { error: "Server is missing OPENAI_API_KEY" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
-  const openai = new OpenAI({ apiKey });
-
-  if (body.text?.format?.type === "json_schema") {
-    return await structuredResponse(openai, body);
-  } else {
-    return await textResponse(openai, body);
-  }
-}
-
-async function structuredResponse(openai: OpenAI, body: any) {
+  let body: any;
   try {
-    const response = await openai.responses.parse({
-      ...(body as any),
-      stream: false,
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON payload" },
+      { status: 400 },
+    );
+  }
+
+  const { model, input, ...rest } = body || {};
+  if (!model || !input) {
+    return NextResponse.json(
+      { error: "Missing model or input" },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input,
+        ...rest,
+      }),
     });
 
-    return NextResponse.json(response);
-  } catch (err: any) {
-    console.error("[/api/responses] structured response error", err);
-    return NextResponse.json({ error: "failed" }, { status: 500 });
-  }
-}
+    if (!response.ok) {
+      const text = await response.text();
+      console.error("Failed to call /responses", response.status, text);
+      return NextResponse.json(
+        { error: "Failed to call OpenAI /responses" },
+        { status: response.status },
+      );
+    }
 
-async function textResponse(openai: OpenAI, body: any) {
-  try {
-    const response = await openai.responses.create({
-      ...(body as any),
-      stream: false,
-    });
-
-    return NextResponse.json(response);
-  } catch (err: any) {
-    console.error("[/api/responses] text response error", err);
-    return NextResponse.json({ error: "failed" }, { status: 500 });
+    const data = await response.json();
+    return NextResponse.json(data);
+  } catch (err) {
+    console.error("Error calling /responses", err);
+    return NextResponse.json(
+      { error: "Internal Server Error" },
+      { status: 500 },
+    );
   }
 }

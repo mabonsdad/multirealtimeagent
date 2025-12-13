@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
 
@@ -21,6 +21,8 @@ import { useEvent } from "@/app/contexts/EventContext";
 import { useRealtimeSession } from "./hooks/useRealtimeSession";
 import { createModerationGuardrail } from "@/app/agentConfigs/guardrails";
 import { useRollingTranscription, FULL_TRANSCRIPT_CHUNK_MS, FULL_TRANSCRIPT_HOP_MS } from "./hooks/useRollingTranscription";
+import useAudioDownload from "./hooks/useAudioDownload";
+import { useHandleSessionHistory } from "./hooks/useHandleSessionHistory";
 
 // Agent configs
 import { allAgentSets, defaultAgentSetKey } from "@/app/agentConfigs";
@@ -40,9 +42,6 @@ const sdkScenarioMap: Record<string, RealtimeAgent[]> = {
   groupFacilitatedConversation: groupFacilitatedConversationScenario,
   agentSupervisorFacilitatedConversation: agentSupervisorFacilitatedConversationScenario,
 };
-
-import useAudioDownload from "./hooks/useAudioDownload";
-import { useHandleSessionHistory } from "./hooks/useHandleSessionHistory";
 
 function App() {
   const searchParams = useSearchParams()!;
@@ -111,6 +110,21 @@ function App() {
 
   const [sessionStatus, setSessionStatus] =
     useState<SessionStatus>("DISCONNECTED");
+  const [meetingDurationMinutes, setMeetingDurationMinutes] = useState(6);
+  const [participantNamesInput, setParticipantNamesInput] = useState("");
+  const [sessionStartMs, setSessionStartMs] = useState<number | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [hasSentMeetingConfig, setHasSentMeetingConfig] = useState(false);
+
+  const participantNames = useMemo(
+    () =>
+      participantNamesInput
+        .split(",")
+        .map((n) => n.trim())
+        .filter(Boolean),
+    [participantNamesInput],
+  );
 
   const [isEventsPaneExpanded, setIsEventsPaneExpanded] =
     useState<boolean>(() => {
@@ -207,22 +221,58 @@ function App() {
     }
   }, [isPTTActive]);
 
+  useEffect(() => {
+    if (sessionStatus === "CONNECTED") {
+      const now = Date.now();
+      setSessionStartMs(now);
+      setElapsedSeconds(0);
+    } else if (sessionStatus === "DISCONNECTED") {
+      setSessionStartMs(null);
+      setElapsedSeconds(0);
+    }
+  }, [sessionStatus]);
+
+  useEffect(() => {
+    if (!sessionStartMs) return;
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setElapsedSeconds(Math.floor((now - sessionStartMs) / 1000));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [sessionStartMs]);
+
   const fetchEphemeralKey = async (): Promise<string | null> => {
     const sessionUrl =
       process.env.NEXT_PUBLIC_SESSION_ENDPOINT || "/api/session";
     logClientEvent({ url: sessionUrl }, "fetch_session_token_request");
-    const tokenResponse = await fetch(sessionUrl);
-    const data = await tokenResponse.json();
-    logServerEvent(data, "fetch_session_token_response");
 
-    if (!data.client_secret?.value) {
-      logClientEvent(data, "error.no_ephemeral_key");
-      console.error("No ephemeral key provided by the server");
+    try {
+      const tokenResponse = await fetch(sessionUrl);
+      if (!tokenResponse.ok) {
+        const body = await tokenResponse.text();
+        console.error("Ephemeral key fetch failed", tokenResponse.status, body);
+        setSessionStatus("DISCONNECTED");
+        return null;
+      }
+
+      const data = await tokenResponse.json();
+      logServerEvent(data, "fetch_session_token_response");
+
+      if (!data.client_secret?.value) {
+        logClientEvent(data, "error.no_ephemeral_key");
+        console.error("No ephemeral key provided by the server");
+        setSessionStatus("DISCONNECTED");
+        return null;
+      }
+
+      return data.client_secret.value;
+    } catch (err) {
+      console.error("Error fetching ephemeral key", err);
       setSessionStatus("DISCONNECTED");
       return null;
     }
-
-    return data.client_secret.value;
   };
 
   const connectToRealtime = async () => {
@@ -234,6 +284,10 @@ function App() {
       try {
         const EPHEMERAL_KEY = await fetchEphemeralKey();
         if (!EPHEMERAL_KEY) return;
+
+        const idForSession = sessionId ?? uuidv4();
+        setSessionId(idForSession);
+        setHasSentMeetingConfig(false);
 
         // Ensure the selectedAgentName is first so that it becomes the root
         const reorderedAgents = [...sdkScenarioMap[agentSetKey]];
@@ -261,6 +315,35 @@ function App() {
             addTranscriptBreadcrumb,
           },
         });
+
+        if (
+          agentSetKey === "agentSupervisorFacilitatedConversation" &&
+          !hasSentMeetingConfig
+        ) {
+          const configText = `
+[MEETING CONFIG]
+session_id: ${idForSession}
+duration_minutes: ${meetingDurationMinutes}
+participants: ${participantNames.length ? participantNames.join(", ") : "unknown"}
+[/MEETING CONFIG]
+`.trim();
+
+          const id = uuidv4().slice(0, 32);
+          sendClientEvent(
+            {
+              type: "conversation.item.create",
+              item: {
+                id,
+                type: "message",
+                role: "system",
+                content: [{ type: "input_text", text: configText }],
+              },
+            },
+            "meeting_config_seed",
+          );
+
+          setHasSentMeetingConfig(true);
+        }
       } catch (err) {
         console.error("Error connecting via SDK:", err);
         setSessionStatus("DISCONNECTED");
@@ -275,6 +358,8 @@ function App() {
     disconnect();
     setSessionStatus("DISCONNECTED");
     setIsPTTUserSpeaking(false);
+    setHasSentMeetingConfig(false);
+    setSessionId(null);
   };
 
   const sendSimulatedUserMessage = (text: string) => {
@@ -385,24 +470,6 @@ function App() {
       setMicEnabled(!next);
       return next;
     });
-  };
-
-  const handleAgentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newAgentConfig = e.target.value;
-    const url = new URL(window.location.toString());
-    url.searchParams.set("agentConfig", newAgentConfig);
-    window.location.replace(url.toString());
-  };
-
-  const handleSelectedAgentChange = (
-    e: React.ChangeEvent<HTMLSelectElement>
-  ) => {
-    const newAgentName = e.target.value;
-    // Reconnect session with the newly selected agent as root so that tool
-    // execution works correctly.
-    disconnectFromRealtime();
-    setSelectedAgentName(newAgentName);
-    // connectToRealtime will be triggered by effect watching selectedAgentName
   };
 
   // Because we need a new connection, refresh the page when codec changes
@@ -566,11 +633,6 @@ function App() {
     }
   }, [sessionStatus, isMicMuted, setMicEnabled]);
 
-  const agentSetKey = searchParams.get("agentConfig") || "default";
-  const visibleAgentKeys = Object.keys(allAgentSets).filter(
-    (key) => !["customerServiceRetail", "chatSupervisor"].includes(key)
-  );
-
   return (
     <div className="text-base flex flex-col h-screen bg-gray-100 text-gray-800 relative">
       <div className="p-5 text-lg font-semibold flex justify-between items-center">
@@ -588,67 +650,59 @@ function App() {
             />
           </div>
           <div>
-            Live web-based AI Prototype
+            Multi-Agent AI
           </div>
         </div>
-        <div className="flex items-center">
-          <label className="flex items-center text-base gap-1 mr-2 font-medium">
-            Scenario
+        <div className="flex flex-wrap md:flex-nowrap items-center justify-end gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            Duration (min)
+            <input
+              type="number"
+              min={3}
+              max={30}
+              value={meetingDurationMinutes}
+              onChange={(e) =>
+                setMeetingDurationMinutes(Number(e.target.value) || 8)
+              }
+              className="w-16 border rounded px-1 py-0.5 text-sm"
+            />
           </label>
-          <div className="relative inline-block">
-            <select
-              value={agentSetKey}
-              onChange={handleAgentChange}
-              className="appearance-none border border-gray-300 rounded-lg text-base px-2 py-1 pr-8 cursor-pointer font-normal focus:outline-none"
-            >
-              {visibleAgentKeys.map((agentKey) => (
-                <option key={agentKey} value={agentKey}>
-                  {agentKey}
-                </option>
-              ))}
-            </select>
-            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2 text-gray-600">
-              <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                <path
-                  fillRule="evenodd"
-                  d="M5.23 7.21a.75.75 0 011.06.02L10 10.44l3.71-3.21a.75.75 0 111.04 1.08l-4.25 3.65a.75.75 0 01-1.04 0L5.21 8.27a.75.75 0 01.02-1.06z"
-                  clipRule="evenodd"
-                />
-              </svg>
-            </div>
-          </div>
 
-          {agentSetKey && (
-            <div className="flex items-center ml-6">
-              <label className="flex items-center text-base gap-1 mr-2 font-medium">
-                Agent
-              </label>
-              <div className="relative inline-block">
-                <select
-                  value={selectedAgentName}
-                  onChange={handleSelectedAgentChange}
-                  className="appearance-none border border-gray-300 rounded-lg text-base px-2 py-1 pr-8 cursor-pointer font-normal focus:outline-none"
+          <label className="flex items-center gap-2 text-sm">
+            Participants
+            <input
+              type="text"
+              placeholder="Alex, Sam, Taylor"
+              value={participantNamesInput}
+              onChange={(e) => setParticipantNamesInput(e.target.value)}
+              className="border rounded px-2 py-0.5 text-sm min-w-[220px]"
+            />
+          </label>
+
+          {participantNames.length > 0 && (
+            <div className="flex flex-wrap gap-1 text-xs text-gray-600">
+              {participantNames.map((name) => (
+                <span
+                  key={name}
+                  className="px-2 py-0.5 rounded-full border border-gray-300 bg-gray-50"
                 >
-                  {selectedAgentConfigSet?.map((agent) => (
-                    <option key={agent.name} value={agent.name}>
-                      {agent.name}
-                    </option>
-                  ))}
-                </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2 text-gray-600">
-                  <svg
-                    className="h-4 w-4"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M5.23 7.21a.75.75 0 011.06.02L10 10.44l3.71-3.21a.75.75 0 111.04 1.08l-4.25 3.65a.75.75 0 01-1.04 0L5.21 8.27a.75.75 0 01.02-1.06z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                </div>
-              </div>
+                  {name}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Scenario/Agent selectors temporarily hidden */}
+
+          {sessionStartMs && (
+            <div className="text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-1 text-right whitespace-nowrap">
+              Time: {Math.floor(elapsedSeconds / 60)}:
+              {(elapsedSeconds % 60).toString().padStart(2, "0")} elapsed{" · "}
+              ~{Math.max(
+                meetingDurationMinutes - Math.floor(elapsedSeconds / 60),
+                0,
+              )}{" "}
+              min remaining
             </div>
           )}
         </div>
