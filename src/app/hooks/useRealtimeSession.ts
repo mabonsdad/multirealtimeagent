@@ -174,9 +174,13 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
   }, []);
 
   const setMicEnabled = useCallback((enabled: boolean) => {
-    const pc = sessionRef.current?.transport.connectionState.peerConnection;
+    const transport = sessionRef.current?.transport;
+    // Connection state is available on the WebRTC transport; guard for other transports.
+    const pc =
+      (transport as any)?.connectionState?.peerConnection ??
+      (transport as any)?.connection?.peerConnection;
     if (!pc) return;
-    pc.getSenders().forEach((sender) => {
+    pc.getSenders().forEach((sender: RTCRtpSender) => {
       if (sender.track?.kind === 'audio') {
         sender.track.enabled = enabled;
       }
