@@ -124,9 +124,7 @@ function useAudioDownload() {
                 type: segmentBlob.type,
               });
               Promise.resolve(options.onChunk(segmentBlob, currentIndex)).catch(
-                (err) => {
-                  console.error("Chunk handler failed:", err);
-                }
+                () => {}
               );
             }
             if (isSegmentingRef.current) {

@@ -1,11 +1,6 @@
 // src/app/agentConfigs/agentSupervisorFacilitatedConversation/hostVoice.ts
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
 
-// Optional: different models for the “sub-roles”
-const SCENARIO_PLANNER_MODEL = 'gpt-4.1-mini';
-const PARTICIPANT_EXPERIENCE_MODEL = 'gpt-4.1-mini';
-const REFERENCE_KNOWLEDGE_MODEL = 'gpt-4.1-mini';
-
 export const hostVoiceAgent = new RealtimeAgent({
   name: 'hostVoiceAgent',
   voice: 'ash',
@@ -13,7 +8,7 @@ export const hostVoiceAgent = new RealtimeAgent({
     'Main host that talks to the group, guides the cake decision, and silently calls planner/participant/knowledge tools when needed.',
 
   instructions: `
-You are the *Host* voice agent for a live group meeting about choosing a cake
+You are the patient *Host* voice agent for a live group meeting about choosing a cake
 for afternoon tea today.
 
 ==== Goal of the meeting ====
