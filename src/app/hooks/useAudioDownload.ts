@@ -1,80 +1,217 @@
-import { useRef } from "react";
+import { useCallback, useRef } from "react";
 import { convertWebMBlobToWav } from "../lib/audioUtils";
+
+type StartRecordingOptions = {
+  chunkDurationMs?: number;
+  chunkHopMs?: number;
+  includeMic?: boolean;
+  onChunk?: (blob: Blob, chunkIndex: number) => void | Promise<void>;
+};
 
 function useAudioDownload() {
   // Ref to store the MediaRecorder instance.
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   // Ref to collect all recorded Blob chunks.
   const recordedChunksRef = useRef<Blob[]>([]);
+  const chunkIndexRef = useRef<number>(0);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const currentRecorderRef = useRef<MediaRecorder | null>(null);
+  const currentSegmentChunksRef = useRef<Blob[]>([]);
+  const chunkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isSegmentingRef = useRef(false);
 
   /**
    * Starts recording by combining the provided remote stream with
    * the microphone audio.
    * @param remoteStream - The remote MediaStream (e.g., from the audio element).
    */
-  const startRecording = async (remoteStream: MediaStream) => {
-    let micStream: MediaStream;
-    try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (err) {
-      console.error("Error getting microphone stream:", err);
-      // Fallback to an empty MediaStream if microphone access fails.
-      micStream = new MediaStream();
-    }
+  const startRecording = useCallback(
+    async (remoteStream: MediaStream, options: StartRecordingOptions = {}) => {
+      const includeMic = options.includeMic ?? true;
 
-    // Create an AudioContext to merge the streams.
-    const audioContext = new AudioContext();
-    const destination = audioContext.createMediaStreamDestination();
+      let micStream: MediaStream = new MediaStream();
+      if (includeMic) {
+        try {
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err) {
+          console.error("Error getting microphone stream:", err);
+          // Fallback to an empty MediaStream if microphone access fails.
+          micStream = new MediaStream();
+        }
+      }
 
-    // Connect the remote audio stream.
-    try {
-      const remoteSource = audioContext.createMediaStreamSource(remoteStream);
-      remoteSource.connect(destination);
-    } catch (err) {
-      console.error("Error connecting remote stream to the audio context:", err);
-    }
+      // First, try a lightweight merge by combining tracks directly.
+      let combinedStream: MediaStream | null = null;
+      try {
+        const tracks: MediaStreamTrack[] = [];
+        remoteStream.getAudioTracks().forEach((t) => tracks.push(t.clone()));
+        micStream.getAudioTracks().forEach((t) => tracks.push(t));
 
-    // Connect the microphone audio stream.
-    try {
-      const micSource = audioContext.createMediaStreamSource(micStream);
-      micSource.connect(destination);
-    } catch (err) {
-      console.error("Error connecting microphone stream to the audio context:", err);
-    }
+        // Only use direct merge if it results in a single audio track;
+        // MediaRecorder throws when multiple audio tracks are present.
+        if (tracks.length === 1) {
+          combinedStream = new MediaStream([tracks[0]]);
+        }
+      } catch (err) {
+        console.warn("Direct track merge failed, falling back to AudioContext mix", err);
+        combinedStream = null;
+      }
 
-    const options = { mimeType: "audio/webm" };
-    try {
-      const mediaRecorder = new MediaRecorder(destination.stream, options);
-      mediaRecorder.ondataavailable = (event: BlobEvent) => {
-        if (event.data && event.data.size > 0) {
-          recordedChunksRef.current.push(event.data);
+      // If direct merge fails (or yields no tracks), fall back to AudioContext mix.
+      if (!combinedStream || combinedStream.getAudioTracks().length === 0) {
+        const remoteRate = remoteStream.getAudioTracks()[0]?.getSettings().sampleRate;
+        const micRate = micStream.getAudioTracks()[0]?.getSettings().sampleRate;
+        const targetSampleRate = remoteRate || micRate;
+        const audioContext = targetSampleRate
+          ? new AudioContext({ sampleRate: targetSampleRate })
+          : new AudioContext();
+        audioContextRef.current = audioContext;
+        const destination = audioContext.createMediaStreamDestination();
+
+        // Connect the remote audio stream.
+        try {
+          const remoteSource = audioContext.createMediaStreamSource(remoteStream);
+          remoteSource.connect(destination);
+        } catch (err) {
+          console.error("Error connecting remote stream to the audio context:", err);
+        }
+
+        // Connect the microphone audio stream if present.
+        if (micStream.getAudioTracks().length > 0) {
+          try {
+            const micSource = audioContext.createMediaStreamSource(micStream);
+            micSource.connect(destination);
+          } catch (err) {
+            console.error("Error connecting microphone stream to the audio context:", err);
+          }
+        }
+
+        combinedStream = destination.stream;
+      }
+
+      const recorderOptions: MediaRecorderOptions = {
+        mimeType: "audio/webm;codecs=opus",
+        audioBitsPerSecond: 64000,
+      };
+
+      const startSegmentRecorder = () => {
+        try {
+          currentSegmentChunksRef.current = [];
+          const mediaRecorder = new MediaRecorder(combinedStream, recorderOptions);
+          currentRecorderRef.current = mediaRecorder;
+          chunkIndexRef.current = chunkIndexRef.current; // no-op to avoid linter
+
+          mediaRecorder.ondataavailable = (event: BlobEvent) => {
+            if (event.data && event.data.size > 0) {
+              const blob =
+                event.data.type && event.data.type !== 'application/octet-stream'
+                  ? event.data
+                  : new Blob([event.data], { type: 'audio/webm' });
+              currentSegmentChunksRef.current.push(blob);
+              recordedChunksRef.current.push(blob);
+            }
+          };
+
+          mediaRecorder.onstop = () => {
+            const segmentBlob = new Blob(currentSegmentChunksRef.current, {
+              type: "audio/webm",
+            });
+            if (options.onChunk && segmentBlob.size > 0) {
+              const currentIndex = chunkIndexRef.current++;
+              console.debug("Recorder chunk captured", {
+                chunkIndex: currentIndex,
+                bytes: segmentBlob.size,
+                type: segmentBlob.type,
+              });
+              Promise.resolve(options.onChunk(segmentBlob, currentIndex)).catch(
+                (err) => {
+                  console.error("Chunk handler failed:", err);
+                }
+              );
+            }
+            if (isSegmentingRef.current) {
+              scheduleNextSegment();
+            }
+          };
+
+          mediaRecorder.start();
+
+          const hopMs = options.chunkHopMs || options.chunkDurationMs;
+          if (hopMs) {
+            chunkTimerRef.current = setTimeout(() => {
+              if (mediaRecorder.state === "recording") {
+                mediaRecorder.requestData();
+                mediaRecorder.stop();
+              }
+            }, hopMs);
+          }
+        } catch (err) {
+          console.error("Error starting MediaRecorder with combined stream:", err);
         }
       };
-      // Start recording without a timeslice.
-      mediaRecorder.start();
-      mediaRecorderRef.current = mediaRecorder;
-    } catch (err) {
-      console.error("Error starting MediaRecorder with combined stream:", err);
-    }
-  };
+
+      const scheduleNextSegment = () => {
+        if (chunkTimerRef.current) {
+          clearTimeout(chunkTimerRef.current);
+          chunkTimerRef.current = null;
+        }
+        startSegmentRecorder();
+      };
+
+      isSegmentingRef.current = true;
+      startSegmentRecorder();
+      mediaRecorderRef.current = currentRecorderRef.current;
+    },
+    [],
+  );
 
   /**
    * Stops the MediaRecorder, if active.
    */
-  const stopRecording = () => {
+  const stopRecording = useCallback(() => {
+    isSegmentingRef.current = false;
+    if (chunkTimerRef.current) {
+      clearTimeout(chunkTimerRef.current);
+      chunkTimerRef.current = null;
+    }
+    if (currentRecorderRef.current) {
+      if (currentRecorderRef.current.state === "recording") {
+        try {
+          currentRecorderRef.current.requestData();
+        } catch (err) {
+          // Swallow if already inactive.
+        }
+        currentRecorderRef.current.stop();
+      }
+      currentRecorderRef.current = null;
+    }
     if (mediaRecorderRef.current) {
       // Request any final data before stopping.
-      mediaRecorderRef.current.requestData();
-      mediaRecorderRef.current.stop();
+      if (mediaRecorderRef.current.state === "recording") {
+        try {
+          mediaRecorderRef.current.requestData();
+        } catch (err) {
+          // ignore
+        }
+        mediaRecorderRef.current.stop();
+      }
       mediaRecorderRef.current = null;
     }
-  };
+    if (audioContextRef.current) {
+      try {
+        audioContextRef.current.close();
+      } catch (err) {
+        console.warn("Failed to close audio context", err);
+      }
+      audioContextRef.current = null;
+    }
+  }, []);
 
   /**
    * Initiates download of the recording after converting from WebM to WAV.
    * If the recorder is still active, we request its latest data before downloading.
    */
-  const downloadRecording = async () => {
+  const downloadRecording = useCallback(async () => {
     // If recording is still active, request the latest chunk.
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       // Request the current data.
@@ -113,7 +250,7 @@ function useAudioDownload() {
     } catch (err) {
       console.error("Error converting recording to WAV:", err);
     }
-  };
+  }, []);
 
   return { startRecording, stopRecording, downloadRecording };
 }

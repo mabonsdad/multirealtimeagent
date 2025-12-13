@@ -9,6 +9,7 @@ import Image from "next/image";
 import Transcript from "./components/Transcript";
 import Events from "./components/Events";
 import BottomToolbar from "./components/BottomToolbar";
+import FullTranscript from "./components/FullTranscript";
 
 // Types
 import { SessionStatus } from "@/app/types";
@@ -19,6 +20,7 @@ import { useTranscript } from "@/app/contexts/TranscriptContext";
 import { useEvent } from "@/app/contexts/EventContext";
 import { useRealtimeSession } from "./hooks/useRealtimeSession";
 import { createModerationGuardrail } from "@/app/agentConfigs/guardrails";
+import { useRollingTranscription, FULL_TRANSCRIPT_CHUNK_MS, FULL_TRANSCRIPT_HOP_MS } from "./hooks/useRollingTranscription";
 
 // Agent configs
 import { allAgentSets, defaultAgentSetKey } from "@/app/agentConfigs";
@@ -27,12 +29,16 @@ import { chatSupervisorScenario } from "@/app/agentConfigs/chatSupervisor";
 import { customerServiceRetailCompanyName } from "@/app/agentConfigs/customerServiceRetail";
 import { chatSupervisorCompanyName } from "@/app/agentConfigs/chatSupervisor";
 import { simpleHandoffScenario } from "@/app/agentConfigs/simpleHandoff";
+import { groupFacilitatedConversationScenario } from "@/app/agentConfigs/groupFacilitatedConversation";
+import { agentSupervisorFacilitatedConversationScenario } from "@/app/agentConfigs/agentSupervisorFacilitatedConversation";
 
 // Map used by connect logic for scenarios defined via the SDK.
 const sdkScenarioMap: Record<string, RealtimeAgent[]> = {
   simpleHandoff: simpleHandoffScenario,
   customerServiceRetail: customerServiceRetailScenario,
   chatSupervisor: chatSupervisorScenario,
+  groupFacilitatedConversation: groupFacilitatedConversationScenario,
+  agentSupervisorFacilitatedConversation: agentSupervisorFacilitatedConversationScenario,
 };
 
 import useAudioDownload from "./hooks/useAudioDownload";
@@ -94,6 +100,7 @@ function App() {
     sendEvent,
     interrupt,
     mute,
+    setMicEnabled,
   } = useRealtimeSession({
     onConnectionChange: (s) => setSessionStatus(s as SessionStatus),
     onAgentHandoff: (agentName: string) => {
@@ -106,7 +113,12 @@ function App() {
     useState<SessionStatus>("DISCONNECTED");
 
   const [isEventsPaneExpanded, setIsEventsPaneExpanded] =
-    useState<boolean>(true);
+    useState<boolean>(() => {
+      if (typeof window === 'undefined') return false;
+      const stored = localStorage.getItem("logsExpanded");
+      if (stored !== null) return stored === "true";
+      return false;
+    });
   const [userText, setUserText] = useState<string>("");
   const [isPTTActive, setIsPTTActive] = useState<boolean>(false);
   const [isPTTUserSpeaking, setIsPTTUserSpeaking] = useState<boolean>(false);
@@ -117,6 +129,23 @@ function App() {
       return stored ? stored === 'true' : true;
     },
   );
+  const [isAIMuted, setIsAIMuted] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const stored = localStorage.getItem('aiMuted');
+    return stored ? stored === 'true' : false;
+  });
+  const [isMicMuted, setIsMicMuted] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const stored = localStorage.getItem('micMuted');
+    return stored ? stored === 'true' : false;
+  });
+  const {
+    handleAudioChunk,
+    speakerBlocks,
+    speakerLabels,
+    hasPending,
+    error: transcriptionError,
+  } = useRollingTranscription();
 
   // Initialize the recording hook.
   const { startRecording, stopRecording, downloadRecording } =
@@ -214,16 +243,20 @@ function App() {
           reorderedAgents.unshift(agent);
         }
 
-        const companyName = agentSetKey === 'customerServiceRetail'
-          ? customerServiceRetailCompanyName
-          : chatSupervisorCompanyName;
-        const guardrail = createModerationGuardrail(companyName);
+        const companyNameMap: Record<string, string> = {
+          customerServiceRetail: customerServiceRetailCompanyName,
+          chatSupervisor: chatSupervisorCompanyName,
+        };
+        const companyName = companyNameMap[agentSetKey] ?? "";
+        const guardrail = companyName
+          ? createModerationGuardrail(companyName)
+          : null;
 
         await connect({
           getEphemeralKey: async () => EPHEMERAL_KEY,
           initialAgents: reorderedAgents,
           audioElement: sdkAudioElement,
-          outputGuardrails: [guardrail],
+          outputGuardrails: guardrail ? [guardrail] : [],
           extraContext: {
             addTranscriptBreadcrumb,
           },
@@ -231,6 +264,8 @@ function App() {
       } catch (err) {
         console.error("Error connecting via SDK:", err);
         setSessionStatus("DISCONNECTED");
+        // Clear any stale session so subsequent attempts can retry.
+        disconnect();
       }
       return;
     }
@@ -269,7 +304,7 @@ function App() {
           threshold: 0.9,
           prefix_padding_ms: 300,
           silence_duration_ms: 500,
-          create_response: true,
+          create_response: !isAIMuted,
         };
 
     sendEvent({
@@ -280,7 +315,7 @@ function App() {
     });
 
     // Send an initial 'hi' message to trigger the agent to greet the user
-    if (shouldTriggerResponse) {
+    if (shouldTriggerResponse && !isAIMuted && !isMicMuted && !isPTTActive) {
       sendSimulatedUserMessage('hi');
     }
     return;
@@ -304,7 +339,9 @@ function App() {
     interrupt();
 
     setIsPTTUserSpeaking(true);
-    sendClientEvent({ type: 'input_audio_buffer.clear' }, 'clear PTT buffer');
+    if (!isMicMuted) {
+      sendClientEvent({ type: 'input_audio_buffer.clear' }, 'clear PTT buffer');
+    }
 
     // No placeholder; we'll rely on server transcript once ready.
   };
@@ -314,8 +351,12 @@ function App() {
       return;
 
     setIsPTTUserSpeaking(false);
-    sendClientEvent({ type: 'input_audio_buffer.commit' }, 'commit PTT');
-    sendClientEvent({ type: 'response.create' }, 'trigger response PTT');
+    if (!isMicMuted) {
+      sendClientEvent({ type: 'input_audio_buffer.commit' }, 'commit PTT');
+      if (!isAIMuted) {
+        sendClientEvent({ type: 'response.create' }, 'trigger response PTT');
+      }
+    }
   };
 
   const onToggleConnection = () => {
@@ -325,6 +366,25 @@ function App() {
     } else {
       connectToRealtime();
     }
+  };
+
+  const onToggleMuteAI = () => {
+    setIsAIMuted((prev) => {
+      const next = !prev;
+      if (!prev) {
+        // Stop any current speech instantly.
+        interrupt();
+      }
+      return next;
+    });
+  };
+
+  const onToggleMuteMic = () => {
+    setIsMicMuted((prev) => {
+      const next = !prev;
+      setMicEnabled(!next);
+      return next;
+    });
   };
 
   const handleAgentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -385,27 +445,35 @@ function App() {
   }, [isAudioPlaybackEnabled]);
 
   useEffect(() => {
+    localStorage.setItem("aiMuted", isAIMuted.toString());
+  }, [isAIMuted]);
+
+  useEffect(() => {
+    localStorage.setItem("micMuted", isMicMuted.toString());
+  }, [isMicMuted]);
+
+  useEffect(() => {
+    const shouldPlay = isAudioPlaybackEnabled && !isAIMuted;
+
     if (audioElementRef.current) {
-      if (isAudioPlaybackEnabled) {
-        audioElementRef.current.muted = false;
+      audioElementRef.current.muted = !shouldPlay;
+      if (shouldPlay) {
         audioElementRef.current.play().catch((err) => {
           console.warn("Autoplay may be blocked by browser:", err);
         });
       } else {
-        // Mute and pause to avoid brief audio blips before pause takes effect.
-        audioElementRef.current.muted = true;
         audioElementRef.current.pause();
       }
     }
 
     // Toggle server-side audio stream mute so bandwidth is saved when the
-    // user disables playback. 
+    // user disables playback (AI mute leaves stream flowing for transcripts).
     try {
       mute(!isAudioPlaybackEnabled);
     } catch (err) {
       console.warn('Failed to toggle SDK mute', err);
     }
-  }, [isAudioPlaybackEnabled]);
+  }, [isAudioPlaybackEnabled, isAIMuted]);
 
   // Ensure mute state is propagated to transport right after we connect or
   // whenever the SDK client reference becomes available.
@@ -419,20 +487,89 @@ function App() {
     }
   }, [sessionStatus, isAudioPlaybackEnabled]);
 
+  // If PTT mode is enabled, stop any ongoing speech and clear buffers so it only responds on press.
   useEffect(() => {
-    if (sessionStatus === "CONNECTED" && audioElementRef.current?.srcObject) {
-      // The remote audio stream from the audio element.
+    if (sessionStatus !== "CONNECTED") return;
+    if (isPTTActive) {
+      interrupt();
+      sendClientEvent({ type: 'input_audio_buffer.clear' }, 'ptt mode on clear buffer');
+    }
+  }, [isPTTActive, sessionStatus]);
+
+  // Start/stop combined recording as session status changes.
+  const prevSessionStatusRef = useRef<SessionStatus | null>(null);
+  useEffect(() => {
+    const prevStatus = prevSessionStatusRef.current;
+    prevSessionStatusRef.current = sessionStatus;
+
+    if (
+      sessionStatus === "CONNECTED" &&
+      audioElementRef.current?.srcObject &&
+      prevStatus !== "CONNECTED"
+    ) {
       const remoteStream = audioElementRef.current.srcObject as MediaStream;
-      startRecording(remoteStream);
+      startRecording(remoteStream, {
+        chunkDurationMs: FULL_TRANSCRIPT_CHUNK_MS,
+        chunkHopMs: FULL_TRANSCRIPT_HOP_MS,
+        includeMic: !isMicMuted,
+        onChunk: handleAudioChunk,
+      });
     }
 
-    // Clean up on unmount or when sessionStatus is updated.
+    if (sessionStatus === "DISCONNECTED" && prevStatus !== "DISCONNECTED") {
+      stopRecording();
+    }
+
     return () => {
       stopRecording();
     };
-  }, [sessionStatus]);
+  }, [sessionStatus, startRecording, handleAudioChunk, stopRecording]);
+
+  // Re-apply session settings when AI mute or mic mute toggles.
+  const prevAIMutedRef = useRef<boolean>(isAIMuted);
+  const prevMicMutedRef = useRef<boolean>(isMicMuted);
+  useEffect(() => {
+    const prevAIMuted = prevAIMutedRef.current;
+    const prevMicMuted = prevMicMutedRef.current;
+    prevAIMutedRef.current = isAIMuted;
+    prevMicMutedRef.current = isMicMuted;
+
+    if (sessionStatus !== "CONNECTED") return;
+
+    // Reconfigure turn detection only when AI mute changes.
+    if (prevAIMuted !== isAIMuted) {
+      updateSession(false);
+    }
+
+    // If unmuting AI, optionally nudge a response so it resumes speaking.
+    if (!isAIMuted && prevAIMuted) {
+      sendClientEvent({ type: 'response.create' }, 'unmute ai resume');
+    }
+
+    // Restart local recording pipeline when mic mute toggles so Assembly stream resumes correctly.
+    if (audioElementRef.current?.srcObject && prevMicMuted !== isMicMuted) {
+      const remoteStream = audioElementRef.current.srcObject as MediaStream;
+      stopRecording();
+      startRecording(remoteStream, {
+        chunkDurationMs: FULL_TRANSCRIPT_CHUNK_MS,
+        chunkHopMs: FULL_TRANSCRIPT_HOP_MS,
+        includeMic: !isMicMuted,
+        onChunk: handleAudioChunk,
+      });
+    }
+  }, [isAIMuted, isMicMuted, sessionStatus, startRecording, stopRecording, handleAudioChunk]);
+
+  // Ensure WebRTC mic track state matches UI mute state after connect/toggles.
+  useEffect(() => {
+    if (sessionStatus === "CONNECTED") {
+      setMicEnabled(!isMicMuted);
+    }
+  }, [sessionStatus, isMicMuted, setMicEnabled]);
 
   const agentSetKey = searchParams.get("agentConfig") || "default";
+  const visibleAgentKeys = Object.keys(allAgentSets).filter(
+    (key) => !["customerServiceRetail", "chatSupervisor"].includes(key)
+  );
 
   return (
     <div className="text-base flex flex-col h-screen bg-gray-100 text-gray-800 relative">
@@ -451,7 +588,7 @@ function App() {
             />
           </div>
           <div>
-            Realtime API <span className="text-gray-500">Agents</span>
+            Live web-based AI Prototype
           </div>
         </div>
         <div className="flex items-center">
@@ -464,7 +601,7 @@ function App() {
               onChange={handleAgentChange}
               className="appearance-none border border-gray-300 rounded-lg text-base px-2 py-1 pr-8 cursor-pointer font-normal focus:outline-none"
             >
-              {Object.keys(allAgentSets).map((agentKey) => (
+              {visibleAgentKeys.map((agentKey) => (
                 <option key={agentKey} value={agentKey}>
                   {agentKey}
                 </option>
@@ -528,7 +665,35 @@ function App() {
           }
         />
 
-        <Events isExpanded={isEventsPaneExpanded} />
+        <div className="w-1/2 transition-all duration-200 ease-in-out overflow-hidden flex flex-col gap-2">
+          <div
+            className={`bg-white rounded-xl flex flex-col min-h-0 ${
+              isEventsPaneExpanded ? "flex-[2]" : "flex-1"
+            }`}
+          >
+            <div className="flex items-center justify-between px-6 py-3.5 text-base border-b bg-white rounded-t-xl">
+              <span className="font-semibold">Full Transcript</span>
+              <span className="text-xs text-gray-500">
+                {hasPending
+                  ? "Updating..."
+                  : speakerBlocks.length
+                  ? "Live"
+                  : "Waiting for audio..."}
+              </span>
+            </div>
+            <FullTranscript
+              speakerBlocks={speakerBlocks}
+              speakerLabels={speakerLabels}
+              isLoading={hasPending}
+              error={transcriptionError}
+            />
+          </div>
+          {isEventsPaneExpanded && (
+            <div className="flex-[1] min-h-0">
+              <Events isExpanded={isEventsPaneExpanded} />
+            </div>
+          )}
+        </div>
       </div>
 
       <BottomToolbar
@@ -543,6 +708,10 @@ function App() {
         setIsEventsPaneExpanded={setIsEventsPaneExpanded}
         isAudioPlaybackEnabled={isAudioPlaybackEnabled}
         setIsAudioPlaybackEnabled={setIsAudioPlaybackEnabled}
+        isAIMuted={isAIMuted}
+        onToggleAIMute={onToggleMuteAI}
+        isMicMuted={isMicMuted}
+        onToggleMicMute={onToggleMuteMic}
         codec={urlCodec}
         onCodecChange={handleCodecChange}
       />

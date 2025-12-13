@@ -135,6 +135,7 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
           },
         }),
         model: 'gpt-realtime-mini',
+        initialAgents,
         config: {
           inputAudioTranscription: {
             model: 'gpt-4o-mini-transcribe',
@@ -144,8 +145,15 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
         context: extraContext ?? {},
       });
 
-      await sessionRef.current.connect({ apiKey: ek });
-      updateStatus('CONNECTED');
+      try {
+        await sessionRef.current.connect({ apiKey: ek });
+        updateStatus('CONNECTED');
+      } catch (err) {
+        sessionRef.current?.close();
+        sessionRef.current = null;
+        updateStatus('DISCONNECTED');
+        throw err;
+      }
     },
     [callbacks, updateStatus],
   );
@@ -164,6 +172,16 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
 
   const interrupt = useCallback(() => {
     sessionRef.current?.interrupt();
+  }, []);
+
+  const setMicEnabled = useCallback((enabled: boolean) => {
+    const pc = sessionRef.current?.transport.connectionState.peerConnection;
+    if (!pc) return;
+    pc.getSenders().forEach((sender) => {
+      if (sender.track?.kind === 'audio') {
+        sender.track.enabled = enabled;
+      }
+    });
   }, []);
   
   const sendUserText = useCallback((text: string) => {
@@ -200,5 +218,6 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
     pushToTalkStart,
     pushToTalkStop,
     interrupt,
+    setMicEnabled,
   } as const;
 }
