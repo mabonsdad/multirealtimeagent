@@ -135,7 +135,6 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
           },
         }),
         model: 'gpt-realtime-mini',
-        initialAgents,
         config: {
           inputAudioTranscription: {
             model: 'gpt-4o-mini-transcribe',
