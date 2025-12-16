@@ -82,6 +82,11 @@ function useAudioDownload() {
         console.error("AudioContext mix failed", err);
       }
 
+      if (!combinedStream) {
+        console.error("No combined stream available; aborting recording start");
+        return;
+      }
+
       const recorderOptions: MediaRecorderOptions = {
         mimeType: "audio/webm;codecs=opus",
         audioBitsPerSecond: 64000,
