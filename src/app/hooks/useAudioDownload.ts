@@ -40,25 +40,9 @@ function useAudioDownload() {
         }
       }
 
-      // First, try a lightweight merge by combining tracks directly.
+      // Mix remote + mic with channel separation to help diarisation.
       let combinedStream: MediaStream | null = null;
       try {
-        const tracks: MediaStreamTrack[] = [];
-        remoteStream.getAudioTracks().forEach((t) => tracks.push(t.clone()));
-        micStream.getAudioTracks().forEach((t) => tracks.push(t));
-
-        // Only use direct merge if it results in a single audio track;
-        // MediaRecorder throws when multiple audio tracks are present.
-        if (tracks.length === 1) {
-          combinedStream = new MediaStream([tracks[0]]);
-        }
-      } catch (err) {
-        console.warn("Direct track merge failed, falling back to AudioContext mix", err);
-        combinedStream = null;
-      }
-
-      // If direct merge fails (or yields no tracks), fall back to AudioContext mix.
-      if (!combinedStream || combinedStream.getAudioTracks().length === 0) {
         const remoteRate = remoteStream.getAudioTracks()[0]?.getSettings().sampleRate;
         const micRate = micStream.getAudioTracks()[0]?.getSettings().sampleRate;
         const targetSampleRate = remoteRate || micRate;
@@ -66,27 +50,36 @@ function useAudioDownload() {
           ? new AudioContext({ sampleRate: targetSampleRate })
           : new AudioContext();
         audioContextRef.current = audioContext;
-        const destination = audioContext.createMediaStreamDestination();
 
-        // Connect the remote audio stream.
+        const destination = audioContext.createMediaStreamDestination();
+        const merger = audioContext.createChannelMerger(2);
+
+        // Remote → left channel (0)
         try {
           const remoteSource = audioContext.createMediaStreamSource(remoteStream);
-          remoteSource.connect(destination);
+          remoteSource.channelCountMode = "explicit";
+          remoteSource.channelInterpretation = "discrete";
+          remoteSource.connect(merger, 0, 0);
         } catch (err) {
           console.error("Error connecting remote stream to the audio context:", err);
         }
 
-        // Connect the microphone audio stream if present.
+        // Mic → right channel (1) if present
         if (micStream.getAudioTracks().length > 0) {
           try {
             const micSource = audioContext.createMediaStreamSource(micStream);
-            micSource.connect(destination);
+            micSource.channelCountMode = "explicit";
+            micSource.channelInterpretation = "discrete";
+            micSource.connect(merger, 0, 1);
           } catch (err) {
             console.error("Error connecting microphone stream to the audio context:", err);
           }
         }
 
+        merger.connect(destination);
         combinedStream = destination.stream;
+      } catch (err) {
+        console.error("AudioContext mix failed", err);
       }
 
       const recorderOptions: MediaRecorderOptions = {

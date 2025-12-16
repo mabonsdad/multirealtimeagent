@@ -40,6 +40,9 @@ yarn-error.log*
 next-env.d.ts
 todo.md
 
+# reference only files
+lambda_for_ref/chatbot-livetranscribe.py
+
 #amplify-do-not-edit-begin
 amplify/\#current-cloud-backend
 amplify/.config/local-*

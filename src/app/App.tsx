@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
 
@@ -92,6 +92,27 @@ function App() {
     }
   }, [sdkAudioElement]);
 
+  // Prefer captureStream to ensure we record what is actually played.
+  const getPlaybackStream = useCallback((): MediaStream | null => {
+    const el = audioElementRef.current;
+    if (!el) return null;
+    const srcObj = el.srcObject as MediaStream | null;
+    if (srcObj && srcObj.getAudioTracks().length > 0) {
+      return srcObj;
+    }
+    try {
+      if (typeof (el as any).captureStream === "function") {
+        return (el as any).captureStream() as MediaStream;
+      }
+      if (typeof (el as any).mozCaptureStream === "function") {
+        return (el as any).mozCaptureStream() as MediaStream;
+      }
+    } catch (err) {
+      console.warn("captureStream failed, falling back to srcObject", err);
+    }
+    return srcObj || null;
+  }, []);
+
   const {
     connect,
     disconnect,
@@ -159,7 +180,7 @@ function App() {
     speakerLabels,
     hasPending,
     error: transcriptionError,
-  } = useRollingTranscription();
+  } = useRollingTranscription(sessionId);
 
   // Initialize the recording hook.
   const { startRecording, stopRecording, downloadRecording } =
@@ -359,7 +380,6 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     setSessionStatus("DISCONNECTED");
     setIsPTTUserSpeaking(false);
     setHasSentMeetingConfig(false);
-    setSessionId(null);
   };
 
   const sendSimulatedUserMessage = (text: string) => {
@@ -571,10 +591,11 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
 
     if (
       sessionStatus === "CONNECTED" &&
-      audioElementRef.current?.srcObject &&
+      getPlaybackStream() &&
       prevStatus !== "CONNECTED"
     ) {
-      const remoteStream = audioElementRef.current.srcObject as MediaStream;
+      const remoteStream = getPlaybackStream();
+      if (!remoteStream) return;
       startRecording(remoteStream, {
         chunkDurationMs: FULL_TRANSCRIPT_CHUNK_MS,
         chunkHopMs: FULL_TRANSCRIPT_HOP_MS,
@@ -590,7 +611,7 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     return () => {
       stopRecording();
     };
-  }, [sessionStatus, startRecording, handleAudioChunk, stopRecording]);
+  }, [sessionStatus, startRecording, handleAudioChunk, stopRecording, getPlaybackStream, isMicMuted]);
 
   // Re-apply session settings when AI mute or mic mute toggles.
   const prevAIMutedRef = useRef<boolean>(isAIMuted);
@@ -614,17 +635,19 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     }
 
     // Restart local recording pipeline when mic mute toggles so Assembly stream resumes correctly.
-    if (audioElementRef.current?.srcObject && prevMicMuted !== isMicMuted) {
-      const remoteStream = audioElementRef.current.srcObject as MediaStream;
-      stopRecording();
-      startRecording(remoteStream, {
-        chunkDurationMs: FULL_TRANSCRIPT_CHUNK_MS,
-        chunkHopMs: FULL_TRANSCRIPT_HOP_MS,
-        includeMic: !isMicMuted,
-        onChunk: handleAudioChunk,
-      });
+    if (prevMicMuted !== isMicMuted) {
+      const remoteStream = getPlaybackStream();
+      if (remoteStream) {
+        stopRecording();
+        startRecording(remoteStream, {
+          chunkDurationMs: FULL_TRANSCRIPT_CHUNK_MS,
+          chunkHopMs: FULL_TRANSCRIPT_HOP_MS,
+          includeMic: !isMicMuted,
+          onChunk: handleAudioChunk,
+        });
+      }
     }
-  }, [isAIMuted, isMicMuted, sessionStatus, startRecording, stopRecording, handleAudioChunk]);
+  }, [isAIMuted, isMicMuted, sessionStatus, startRecording, stopRecording, handleAudioChunk, getPlaybackStream]);
 
   // Ensure WebRTC mic track state matches UI mute state after connect/toggles.
   useEffect(() => {
@@ -662,7 +685,7 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
               max={30}
               value={meetingDurationMinutes}
               onChange={(e) =>
-                setMeetingDurationMinutes(Number(e.target.value) || 8)
+                setMeetingDurationMinutes(Number(e.target.value) || 6)
               }
               className="w-16 border rounded px-1 py-0.5 text-sm"
             />

@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { convertWebMBlobToWav } from "../lib/audioUtils";
 
 type Utterance = {
-  speaker: string;
+  speakerId: string;
+  speakerLabel: string;
   start: number;
   end: number;
   text: string;
@@ -15,6 +15,8 @@ type JobStatus = "queued" | "processing" | "completed" | "error" | "unknown";
 interface Job {
   jobId: string;
   status: JobStatus;
+  sessionId: string;
+  chunkIndex: number;
   chunkStartMs?: number;
   chunkEndMs?: number;
   utterances: Utterance[];
@@ -28,8 +30,8 @@ const DEFAULT_LAMBDA_BASE =
   "https://7dbkxxj6b1.execute-api.eu-west-2.amazonaws.com/default";
 
 const POLL_INTERVAL_MS = 5000;
-export const FULL_TRANSCRIPT_CHUNK_MS = 30_000; // duration of each chunk sent to Lambda
-export const FULL_TRANSCRIPT_HOP_MS = 20_000; // stride between chunks (10s overlap for stability)
+export const FULL_TRANSCRIPT_CHUNK_MS = 40_000; // duration of each chunk sent to Lambda
+export const FULL_TRANSCRIPT_HOP_MS = 25_000; // stride between chunks (15s overlap for stability)
 
 // Helper: convert blob to base64 (no prefix)
 const blobToBase64 = (blob: Blob): Promise<string> => {
@@ -45,7 +47,7 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-export function useRollingTranscription() {
+export function useRollingTranscription(sessionId?: string | null) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [error, setError] = useState<string | null>(null);
   const lambdaBase = useMemo(() => {
@@ -53,9 +55,19 @@ export function useRollingTranscription() {
     return trimmed.endsWith("/default") ? trimmed : `${trimmed}/default`;
   }, []);
 
+  useEffect(() => {
+    // Reset rolling transcript when the session changes.
+    setJobs([]);
+    setError(null);
+  }, [sessionId]);
+
   const handleAudioChunk = useCallback(
     async (blob: Blob, chunkIndex: number) => {
       try {
+        if (!sessionId) {
+          console.warn("No sessionId available; skipping chunk upload");
+          return;
+        }
         if (!blob || blob.size < 2000) {
           console.warn("Skipping tiny/empty audio chunk", {
             chunkIndex,
@@ -63,15 +75,8 @@ export function useRollingTranscription() {
           });
           return;
         }
-        let uploadBlob = blob;
-        // Try to normalize to WAV to satisfy AssemblyAI when browser emits octet-stream chunks.
-        try {
-          uploadBlob = await convertWebMBlobToWav(blob);
-        } catch (err) {
-          console.warn("Falling back to raw chunk; wav conversion failed", err);
-          uploadBlob = blob;
-        }
-
+        // Keep the original (typically webm/opus) to minimize payload size; server handles format.
+        const uploadBlob = blob;
         const base64 = await blobToBase64(uploadBlob);
         const chunkStartMs = chunkIndex * FULL_TRANSCRIPT_HOP_MS;
         const chunkEndMs = chunkStartMs + FULL_TRANSCRIPT_CHUNK_MS;
@@ -84,6 +89,8 @@ export function useRollingTranscription() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             audio_base64: base64,
+            sessionId,
+            chunkIndex,
             chunkStartMs,
             chunkEndMs,
           }),
@@ -109,11 +116,15 @@ export function useRollingTranscription() {
               uploadType: uploadBlob.type,
               chunkStartMs,
               chunkEndMs,
+              base64Length: base64.length,
+              sessionId,
             }
           );
-          setError(
-            `Failed to send audio chunk (${resp.status} ${resp.statusText || ""}).`
-          );
+          const errorMsg =
+            errBody.error ||
+            errBody.message ||
+            `Failed to send audio chunk (${resp.status} ${resp.statusText || ""}).`;
+          setError(errorMsg);
           return;
         }
 
@@ -125,6 +136,8 @@ export function useRollingTranscription() {
           {
             jobId,
             status: "queued",
+            sessionId,
+            chunkIndex,
             chunkStartMs: data.chunkStartMs,
             chunkEndMs: data.chunkEndMs,
             utterances: [],
@@ -135,7 +148,7 @@ export function useRollingTranscription() {
         setError("Error preparing or sending audio chunk.");
       }
     },
-    [lambdaBase]
+    [lambdaBase, sessionId]
   );
 
   const pollPendingJobs = useCallback(async () => {
@@ -153,6 +166,8 @@ export function useRollingTranscription() {
           try {
             const url = new URL(`${lambdaBase}/diarisation-status`);
             url.searchParams.set("jobId", job.jobId);
+            url.searchParams.set("sessionId", job.sessionId);
+            url.searchParams.set("chunkIndex", String(job.chunkIndex));
 
             const resp = await fetch(url.toString());
             if (!resp.ok) {
@@ -226,22 +241,13 @@ export function useRollingTranscription() {
         lastEnd = Math.max(lastEnd, u.end);
       }
     }
-    // Smooth speaker labels across jobs: remap speakers consistently by order of appearance.
-    const seenMap = new Map<string, string>();
-    let nextId = 1;
-    return merged.map((u) => {
-      if (!seenMap.has(u.speaker)) {
-        seenMap.set(u.speaker, `spk_${nextId++}`);
-      }
-      return { ...u, speaker: seenMap.get(u.speaker) as string };
-    });
+    return merged;
   }, [jobs]);
 
   const speakerLabels = useMemo(() => {
-    const speakers = Array.from(new Set(allUtterances.map((u) => u.speaker))).sort();
     const map: Record<string, string> = {};
-    speakers.forEach((speaker, idx) => {
-      map[speaker] = `Speaker ${idx + 1}`;
+    allUtterances.forEach((u) => {
+      map[u.speakerId] = u.speakerLabel || u.speakerId;
     });
     return map;
   }, [allUtterances]);
@@ -252,14 +258,14 @@ export function useRollingTranscription() {
     let currentText: string[] = [];
 
     for (const utterance of allUtterances) {
-      if (utterance.speaker !== currentSpeaker) {
+      if (utterance.speakerId !== currentSpeaker) {
         if (currentSpeaker !== null) {
           blocks.push({
             speaker: currentSpeaker,
             text: currentText.join(" "),
           });
         }
-        currentSpeaker = utterance.speaker;
+        currentSpeaker = utterance.speakerId;
         currentText = [utterance.text];
       } else {
         currentText.push(utterance.text);
