@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { S3Client, GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  ListObjectsV2CommandOutput,
+} from "@aws-sdk/client-s3";
 import { Readable } from "stream";
 import { randomUUID } from "crypto";
 
@@ -21,7 +27,7 @@ const TRANSKRIPTOR_BASE =
   "https://api.tor.app/developer";
 
 const S3_BUCKET = process.env.TRANSKRIPTOR_S3_BUCKET || process.env.S3_BUCKET;
-const S3_REGION = process.env.AWS_REGION || "us-east-1";
+const S3_REGION = process.env.AWS_REGION || "eu-west-2";
 const PROFILE_PREFIX = "chatbot-livetranscribe/profiles";
 
 function getS3Client() {
@@ -86,7 +92,7 @@ async function listProfileMetas(): Promise<ProfileRecord[]> {
   let continuationToken: string | undefined = undefined;
 
   do {
-    const listResp = await client.send(
+    const listResp: ListObjectsV2CommandOutput = await client.send(
       new ListObjectsV2Command({
         Bucket: S3_BUCKET,
         Prefix: `${PROFILE_PREFIX}/`,
