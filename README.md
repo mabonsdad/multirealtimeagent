@@ -224,6 +224,10 @@ Assistant messages are checked for safety and compliance before they are shown i
 
 Feel free to open an issue or pull request and we'll do our best to review it. The spirit of this repo is to demonstrate the core logic for new agentic flows; PRs that go beyond this core scope will likely not be merged.
 
+## Codex Best Practice (house rules)
+- When working in `dev`, push only to `dev` and deploy directly to the Amplify dev environment. Do not push to `main` from that flow.
+- Keep any future notes on expected operator behaviour in this section.
+
 # Core Contributors
 - Noah MacCallum - [noahmacca](https://x.com/noahmacca)
 - Ilan Bigio - [ibigio](https://github.com/ibigio)
