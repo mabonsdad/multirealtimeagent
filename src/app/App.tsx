@@ -10,6 +10,7 @@ import Transcript from "./components/Transcript";
 import Events from "./components/Events";
 import BottomToolbar from "./components/BottomToolbar";
 import FullTranscript from "./components/FullTranscript";
+import ProfileManagerModal from "./components/ProfileManagerModal";
 
 // Types
 import { SessionStatus } from "@/app/types";
@@ -154,6 +155,7 @@ function App() {
       if (stored !== null) return stored === "true";
       return false;
     });
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
   const [userText, setUserText] = useState<string>("");
   const [isPTTActive, setIsPTTActive] = useState<boolean>(false);
   const [isPTTUserSpeaking, setIsPTTUserSpeaking] = useState<boolean>(false);
@@ -717,6 +719,13 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
 
           {/* Scenario/Agent selectors temporarily hidden */}
 
+          <button
+            onClick={() => setIsProfileModalOpen(true)}
+            className="text-xs px-3 py-1.5 rounded-md border border-gray-300 bg-white hover:bg-gray-50 whitespace-nowrap"
+          >
+            Manage Profiles
+          </button>
+
           {sessionStartMs && (
             <div className="text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-1 text-right whitespace-nowrap">
               Time: {Math.floor(elapsedSeconds / 60)}:
@@ -791,6 +800,10 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
         onToggleMicMute={onToggleMuteMic}
         codec={urlCodec}
         onCodecChange={handleCodecChange}
+      />
+      <ProfileManagerModal
+        open={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
       />
     </div>
   );

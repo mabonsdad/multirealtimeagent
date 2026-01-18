@@ -23,6 +23,7 @@ There are two main patterns demonstrated:
 
 - This is a Next.js typescript app. Install dependencies with `npm i`.
 - Add your `OPENAI_API_KEY` to your env. Either add it to your `.bash_profile` or equivalent, or copy `.env.sample` to `.env` and add it there.
+- For Transkriptor profile onboarding, set `TRANSKRIPTOR_API_KEY`. You can override the base with `TRANSKRIPTOR_BASE_URL` (defaults to `https://api.tor.app/developer`). Profiles and their audio are stored in `S3_BUCKET` (or `TRANSKRIPTOR_S3_BUCKET` if set).
 - Start the server with `npm run dev`
 - Open your browser to [http://localhost:3000](http://localhost:3000). It should default to the `chatSupervisor` Agent Config.
 - You can change examples via the "Scenario" dropdown in the top right.
