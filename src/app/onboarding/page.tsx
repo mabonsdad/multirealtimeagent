@@ -6,6 +6,7 @@ type ProfileResult = {
   profileId?: string;
   profileKey?: string;
   speakerName?: string;
+  profileSummary?: string;
 };
 
 const blobToBase64 = (blob: Blob): Promise<string> =>
@@ -26,6 +27,7 @@ export default function OnboardingPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ProfileResult | null>(null);
+  const [summary, setSummary] = useState("");
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -97,7 +99,11 @@ export default function OnboardingPage() {
       const resp = await fetch("/api/transkriptor/profiles", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ speakerName: name.trim(), audioBase64: base64 }),
+        body: JSON.stringify({
+          speakerName: name.trim(),
+          audioBase64: base64,
+          profileSummary: summary.trim() || undefined,
+        }),
       });
       const data = await resp.json();
       if (!resp.ok) {
@@ -107,6 +113,7 @@ export default function OnboardingPage() {
         profileId: data.profileId,
         profileKey: data.profileKey,
         speakerName: data.speakerName,
+        profileSummary: summary.trim() || undefined,
       });
       setStatus("Profile created and stored.");
     } catch (err: any) {
@@ -122,12 +129,8 @@ export default function OnboardingPage() {
         <div className="bg-white shadow-sm rounded-2xl p-6 space-y-4">
           <h1 className="text-2xl font-semibold">Participant Onboarding</h1>
           <p className="text-sm text-gray-600">
-            We’ll capture a short voice sample so the system can recognise you. Please speak clearly while you answer:
+            We’ll capture a short voice sample so the system can recognise you. The AI will greet you, confirm your name pronunciation, and ask two quick questions about you and the session.
           </p>
-          <ol className="list-decimal list-inside text-sm text-gray-700 space-y-1">
-            <li>“How would you briefly describe yourself and where you are in your life?”</li>
-            <li>“What would you like to get out of the upcoming session?”</li>
-          </ol>
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-700">Your name</label>
             <input
@@ -136,6 +139,19 @@ export default function OnboardingPage() {
               className="w-full border rounded-lg px-3 py-2 text-sm"
               placeholder="Alex Rivera"
             />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-700">Profile notes (optional)</label>
+            <textarea
+              value={summary}
+              onChange={(e) => setSummary(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+              rows={3}
+              placeholder="e.g., prefers being called Alex; early-career designer; excited but a bit nervous."
+            />
+            <p className="text-xs text-gray-500">
+              Quick facts to store with your voice (pronouns, interests, life stage, goals for the session).
+            </p>
           </div>
           <div className="flex gap-3 flex-wrap">
             <button
@@ -160,6 +176,15 @@ export default function OnboardingPage() {
               Submit to Transkriptor
             </button>
           </div>
+          <div className="bg-gray-50 border rounded-lg p-3 text-xs text-gray-700 space-y-1">
+            <div className="font-semibold">Guided chat flow (what the AI will do)</div>
+            <ul className="list-disc list-inside space-y-1">
+              <li>Greet you by name, check pronunciation; ask you to say your name once.</li>
+              <li>Ask: “How would you briefly describe yourself and where you are in life?”</li>
+              <li>Ask: “What would you like to get out of the session?” with a light follow-up if short.</li>
+              <li>End with a thank you and goodbye. We record only your mic (AI voice excluded).</li>
+            </ul>
+          </div>
           {status && <div className="text-sm text-emerald-700">{status}</div>}
           {error && <div className="text-sm text-red-600">{error}</div>}
           {audioBlob && (
@@ -173,6 +198,7 @@ export default function OnboardingPage() {
               <div>Profile stored for {result.speakerName || "participant"}.</div>
               {result.profileId && <div>Transkriptor profile ID: {result.profileId}</div>}
               {result.profileKey && <div>Local profile key: {result.profileKey}</div>}
+              {result.profileSummary && <div>Notes: {result.profileSummary}</div>}
             </div>
           )}
         </div>

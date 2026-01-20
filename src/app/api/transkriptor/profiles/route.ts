@@ -148,7 +148,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { speakerName, audioBase64 } = await request.json();
+    const { speakerName, audioBase64, profileSummary } = await request.json();
     if (!speakerName || typeof speakerName !== "string") {
       return NextResponse.json(
         { error: "speakerName is required" },
@@ -230,6 +230,7 @@ export async function POST(request: Request) {
       audioKey,
       transkriptorUploadUrl: uploadUrl,
       transkriptorResponse: finalize,
+      profileSummary: profileSummary || undefined,
     };
 
     await client.send(
