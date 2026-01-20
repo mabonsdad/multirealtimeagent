@@ -771,6 +771,7 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
               speakerBlocks={speakerBlocks}
               speakerLabels={speakerLabels}
               isLoading={hasPending}
+              hasPending={hasPending}
               error={transcriptionError}
             />
           </div>

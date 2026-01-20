@@ -7,6 +7,7 @@ interface FullTranscriptProps {
   speakerBlocks: SpeakerBlock[];
   speakerLabels: Record<string, string>;
   isLoading: boolean;
+  hasPending: boolean;
   error?: string | null;
 }
 
@@ -14,6 +15,7 @@ function FullTranscript({
   speakerBlocks,
   speakerLabels,
   isLoading,
+  hasPending,
   error,
 }: FullTranscriptProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -41,12 +43,21 @@ function FullTranscript({
         className="flex-1 overflow-auto px-6 pb-4 space-y-3 text-sm text-gray-800"
       >
         {speakerBlocks.length === 0 && (
-          <p className="text-gray-500 text-sm">
-            Start speaking to see a rolling transcript with speaker labels.
-          </p>
-        )}
+            <p className="text-gray-500 text-sm">
+              Start speaking to see a rolling transcript with speaker labels.
+            </p>
+          )}
           {speakerBlocks.map((block, idx) => {
-            const friendly = speakerLabels[block.speaker] || block.speaker;
+            const rawLabel = speakerLabels[block.speaker] || block.speaker;
+            const friendly =
+              rawLabel.startsWith("SPK_") && rawLabel.length <= 8
+                ? `Speaker ${rawLabel.split("_")[1] || ""}`.trim()
+                : rawLabel.startsWith("User#")
+                ? "User"
+                : rawLabel.length > 18
+                ? `${rawLabel.slice(0, 8)}…`
+                : rawLabel;
+            const isLast = idx === speakerBlocks.length - 1;
             return (
               <div
                 key={`${block.speaker}-${idx}`}
@@ -56,7 +67,10 @@ function FullTranscript({
                 {friendly}
               </div>
               <div className="text-sm leading-relaxed text-gray-900 whitespace-pre-wrap">
-                {block.text}
+                {block.text}{" "}
+                {isLast && hasPending && (
+                  <span className="inline-block animate-pulse">…</span>
+                )}
               </div>
             </div>
           );
