@@ -8,6 +8,11 @@ frontend:
       commands:
         # Make OPENAI_API_KEY available to Next.js server runtime
         - env | grep -e OPENAI_API_KEY >> .env.production
+        - env | grep TRANSKRIPTOR_API_KEY
+        - echo "TRANSKRIPTOR_API_KEY=$TRANSKRIPTOR_API_KEY" >> .env.production
+        - env | grep S3_BUCKET
+        - echo "S3_BUCKET=$S3_BUCKET" >> .env.production
+        - echo "AWS_REGION=$AWS_REGION" >> .env.production
         - npm run build
   artifacts:
     baseDirectory: .next
