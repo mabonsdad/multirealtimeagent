@@ -15,6 +15,7 @@ const meetingContextById: Record<
     startedAtMs?: number;
     maxMinutes?: number;
     participantNames?: string[];
+    onboardingProfiles?: { name: string; summary?: string; profileId?: string }[];
   }
 > = {};
 
@@ -47,6 +48,7 @@ You are the ONLY SPEAKING AGENT in this scenario.
 - You must NEVER hand off the conversation to any other agent.
 - You must NEVER allow any other agent's raw text or JSON to be spoken to the group.
 - You ONLY use tools (plan_meeting_step, get_participant_insights, lookup_cake_options) as silent, backstage helpers.
+- If onboarding profiles are available (names, pronunciation notes, quick facts), greet participants by those names and keep pronunciations consistent.
 
 ==== Meeting goal ====
 The group needs to decide, in roughly 6–8 minutes of conversation:
@@ -183,15 +185,59 @@ Your voice is the only one the group ever hears.
 Use your tools frequently but silently to stay structured, informed, and time-aware.
 
 If you know the list of participant names (for example if the environment or
-configure_meeting_context tool has provided them), try to:
+configure_meeting_context tool has provided them) or you have onboarding profiles,
+try to:
 
 - Address people by name when referring to their preferences.
 - Pass participant_names into get_participant_insights so it can match comments to real names.
+- If you fetched onboarding profiles, keep a short mental note of each person’s preferred name and any useful facts; weave these in briefly (e.g., “Alex mentioned they’re a designer and avoids nuts.”).
 - Invite quieter people by name:
   - "I haven't heard from Taylor yet — Taylor, what kind of cake do you enjoy?"
 `,
 
   tools: [
+    // preload onboarding profiles (names/notes)
+    tool({
+      name: 'fetch_onboarding_profiles',
+      description:
+        'Fetch onboarding profile names and notes so the host can greet people correctly and recall quick facts.',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'Meeting/session id to attach onboarding data to.',
+          },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      async execute(input: any) {
+        const { session_id } = input as { session_id?: string };
+        const id = session_id || 'cake_meeting';
+        try {
+          const resp = await fetch('/api/transkriptor/profiles');
+          if (!resp.ok) {
+            const txt = await resp.text();
+            throw new Error(`Failed to fetch profiles: ${txt}`);
+          }
+          const data = await resp.json();
+          const profiles =
+            (data.profiles as any[])?.map((p) => ({
+              name: p.speakerName || 'Unknown',
+              summary: p.profileSummary,
+              profileId: p.profileId,
+            })) ?? [];
+
+          meetingContextById[id] = meetingContextById[id] || {};
+          meetingContextById[id].onboardingProfiles = profiles;
+
+          return { session_id: id, count: profiles.length, profiles };
+        } catch (err: any) {
+          return { error: err?.message || 'Failed to fetch profiles' };
+        }
+      },
+    }),
     // 0) configure the session title and timer
     tool({
   name: 'configure_meeting_context',
@@ -400,6 +446,18 @@ async execute(input: any) {
     participant_names && participant_names.length
       ? `Known participants: ${participant_names.join(', ')}.`
       : 'Known participants: (none explicitly provided).';
+  const onboardingProfiles =
+    meetingContextById['cake_meeting']?.onboardingProfiles || [];
+  const onboardingText =
+    onboardingProfiles.length > 0
+      ? `Onboarding facts:\n${onboardingProfiles
+          .slice(0, 6)
+          .map(
+            (p) =>
+              `- ${p.name}: ${p.summary || 'no notes'}`,
+          )
+          .join('\n')}`
+      : 'Onboarding facts: none.';
 
   const response = await callResponses({
     model: PARTICIPANT_EXPERIENCE_MODEL,
@@ -413,6 +471,7 @@ async execute(input: any) {
 You are the PARTICIPANT EXPERIENCE analyst for a cake-choice meeting.
 
 ${namesText}
+${onboardingText}
 
 From the snippet of conversation, infer:
 - which of these participants (if any) have spoken and what they said,
