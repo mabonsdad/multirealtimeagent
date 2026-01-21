@@ -20,6 +20,7 @@ type ProfileRecord = {
   transkriptorResponse?: any;
   transkriptorDeleteResponse?: any;
   archivedAt?: string;
+  profileSummary?: string;
 };
 
 const TRANSKRIPTOR_BASE =
