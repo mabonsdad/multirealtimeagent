@@ -1,6 +1,12 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import { v4 as uuidv4 } from "uuid";
+import { onboardingProfileAgent } from "@/app/agentConfigs/onboardingProfile";
+import { useRealtimeSession } from "../hooks/useRealtimeSession";
+import type { SessionStatus } from "../types";
+import { EventProvider } from "../contexts/EventContext";
+import { TranscriptProvider } from "../contexts/TranscriptContext";
 
 type ProfileResult = {
   profileId?: string;
@@ -28,15 +34,37 @@ export default function OnboardingPage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ProfileResult | null>(null);
   const [summary, setSummary] = useState("");
+  const [chatStatus, setChatStatus] = useState<SessionStatus>("DISCONNECTED");
+  const [chatMessage, setChatMessage] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
+  const {
+    connect,
+    disconnect,
+    sendEvent,
+    status: rtStatus,
+    interrupt,
+  } = useRealtimeSession({
+    onConnectionChange: (s) => setChatStatus(s as SessionStatus),
+  });
+
   useEffect(() => {
+    if (typeof window !== "undefined" && !audioRef.current) {
+      const el = document.createElement("audio");
+      el.autoplay = true;
+      el.style.display = "none";
+      document.body.appendChild(el);
+      audioRef.current = el;
+    }
+
     return () => {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
         mediaRecorderRef.current.stop();
       }
+      disconnect();
     };
   }, []);
 
@@ -74,6 +102,77 @@ export default function OnboardingPage() {
       setError("Microphone access failed. Please allow mic permissions.");
       setStatus(null);
     }
+  };
+
+  const fetchEphemeralKey = async (): Promise<string | null> => {
+    const sessionUrl =
+      process.env.NEXT_PUBLIC_SESSION_ENDPOINT || "/api/session";
+    try {
+      const tokenResponse = await fetch(sessionUrl);
+      if (!tokenResponse.ok) {
+        const body = await tokenResponse.text();
+        console.error("Ephemeral key fetch failed", tokenResponse.status, body);
+        setChatMessage("Failed to fetch session token.");
+        return null;
+      }
+      const data = await tokenResponse.json();
+      if (!data.client_secret?.value) {
+        setChatMessage("No ephemeral key provided by the server.");
+        return null;
+      }
+      return data.client_secret.value;
+    } catch (err) {
+      console.error("Error fetching ephemeral key", err);
+      setChatMessage("Error fetching session token.");
+      return null;
+    }
+  };
+
+  const startGuidedChat = async () => {
+    if (!name.trim()) {
+      setError("Enter your name first.");
+      return;
+    }
+    try {
+      setChatMessage("Connecting to the AI host...");
+      await connect({
+        getEphemeralKey: fetchEphemeralKey,
+        initialAgents: [onboardingProfileAgent],
+        audioElement: audioRef.current || undefined,
+      });
+      setChatMessage("Connected. The AI will greet you.");
+
+      const id = uuidv4().slice(0, 32);
+      const systemSeed = `
+[ONBOARDING CONTEXT]
+participant_name: ${name.trim()}
+[/ONBOARDING CONTEXT]
+`.trim();
+      sendEvent({
+        type: "conversation.item.create",
+        item: {
+          id,
+          type: "message",
+          role: "system",
+          content: [{ type: "input_text", text: systemSeed }],
+        },
+      });
+      sendEvent({ type: "response.create" });
+
+      // Start recording their mic-only sample alongside the chat
+      if (!isRecording) {
+        startRecording();
+      }
+    } catch (err) {
+      console.error("Guided chat start error", err);
+      setChatMessage("Failed to start guided chat. Please retry.");
+    }
+  };
+
+  const stopGuidedChat = () => {
+    interrupt();
+    disconnect();
+    setChatMessage("Chat ended.");
   };
 
   const stopRecording = () => {
@@ -123,7 +222,7 @@ export default function OnboardingPage() {
     }
   };
 
-  return (
+  const content = (
     <div className="min-h-screen bg-gray-100 text-gray-900">
       <div className="max-w-3xl mx-auto px-6 py-10 space-y-6">
         <div className="bg-white shadow-sm rounded-2xl p-6 space-y-4">
@@ -155,11 +254,11 @@ export default function OnboardingPage() {
           </div>
           <div className="flex gap-3 flex-wrap">
             <button
-              onClick={startRecording}
-              disabled={isRecording}
+              onClick={startGuidedChat}
+              disabled={rtStatus !== "DISCONNECTED"}
               className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm disabled:opacity-60"
             >
-              {isRecording ? "Recording..." : "Start Recording"}
+              {rtStatus === "CONNECTING" ? "Connecting..." : "Start guided chat"}
             </button>
             <button
               onClick={stopRecording}
@@ -175,6 +274,20 @@ export default function OnboardingPage() {
             >
               Submit to Transkriptor
             </button>
+          </div>
+          <div className="bg-gray-50 border rounded-lg p-3 text-xs text-gray-700 space-y-1">
+            <div className="font-semibold">AI chat status</div>
+            <div>Connection: {chatStatus}</div>
+            {chatMessage && <div>{chatMessage}</div>}
+            {isRecording && <div className="text-emerald-700">Recording mic sample…</div>}
+            {rtStatus === "CONNECTED" && (
+              <button
+                onClick={stopGuidedChat}
+                className="mt-2 px-3 py-1.5 rounded bg-gray-200 text-gray-800 text-xs"
+              >
+                End chat
+              </button>
+            )}
           </div>
           <div className="bg-gray-50 border rounded-lg p-3 text-xs text-gray-700 space-y-1">
             <div className="font-semibold">Guided chat flow (what the AI will do)</div>
@@ -204,5 +317,11 @@ export default function OnboardingPage() {
         </div>
       </div>
     </div>
+  );
+
+  return (
+    <EventProvider>
+      <TranscriptProvider>{content}</TranscriptProvider>
+    </EventProvider>
   );
 }
