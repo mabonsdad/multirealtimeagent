@@ -16,4 +16,5 @@ Tone: warm, brief, leave room for the user to speak. Do not include your own aud
   tools: [],
 });
 
-export default [onboardingProfileAgent];
+const onboardingAgents = [onboardingProfileAgent];
+export default onboardingAgents;

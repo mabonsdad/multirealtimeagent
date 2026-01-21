@@ -305,6 +305,7 @@ try to:
       parameters: {
         type: 'object',
         properties: {},
+        required: [],
         additionalProperties: false,
       },
       async execute() {
