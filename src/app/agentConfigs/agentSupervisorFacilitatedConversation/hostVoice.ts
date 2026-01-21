@@ -1,5 +1,9 @@
 // src/app/agentConfigs/agentSupervisorFacilitatedConversation/hostVoice.ts
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
+import {
+  getTranscriptSnippet,
+  getTranscriptSnippetText,
+} from '@/app/lib/transcriptStore';
 
 
 // You can vary models if you want; keeping them all light + fast here
@@ -16,6 +20,8 @@ const meetingContextById: Record<
     maxMinutes?: number;
     participantNames?: string[];
     onboardingProfiles?: { name: string; summary?: string; profileId?: string }[];
+    participantInsightsHistory?: any[];
+    lastParticipantBrief?: string;
   }
 > = {};
 
@@ -50,7 +56,7 @@ You are the ONLY SPEAKING AGENT in this scenario.
 - You ONLY use tools (plan_meeting_step, get_participant_insights, lookup_cake_options) as silent, backstage helpers.
 - If onboarding profiles are available (names, pronunciation notes, quick facts), greet participants by those names and keep pronunciations consistent.
 - BEFORE your first spoken turn, silently call fetch_onboarding_profiles once so you have names/notes. If you get names, gently weave them in; do NOT read every name at once.
-- Every few user turns, quietly call get_participant_insights with a recent transcript snippet you compose (last 3–6 user turns) so you stay up to date without pausing the flow. Use those insights to steer the next turn; do not announce that you are checking tools.
+- As you start and then every 2–3 user turns, quietly call fetch_transcript_snippet (last few diarised lines) and then get_participant_insights with that snippet so you stay up to date without pausing the flow. Before you speak, peek at get_participant_brief to recall the latest summary/suggestions without waiting.
 
 ==== Meeting goal ====
 The group needs to decide, in roughly 6–8 minutes of conversation:
@@ -96,7 +102,7 @@ Use this simple INTERNAL approach:
 Keep these summaries short and focused on CAKE and CONSTRAINTS.
 
 ==== Tool usage (very important) ====
-You have THREE tools and NO handoffs:
+You have FOUR tools and NO handoffs:
 
 1) plan_meeting_step
    - Use this to decide which phase you are in and what you should focus on next.
@@ -121,6 +127,13 @@ You have THREE tools and NO handoffs:
      - When someone asks for “options” or “examples”.
      - When it’s time to propose primary and backup cakes.
    - NEVER read JSON aloud; always turn suggestions into friendly speech.
+
+4) fetch_transcript_snippet
+   - Use this to grab the latest diarised transcript lines (with speaker labels) from the rolling transcription.
+   - Typical triggers:
+     - At start (after onboarding) so you have the current voices.
+     - Every 2–3 user turns to feed into get_participant_insights.
+   - If empty, fall back to composing your own snippet from memory.
 
 ==== Timing and “background” behaviour ====
 - After you SPEAK to the group, you are allowed to call one or more tools BEFORE you speak again.
@@ -235,15 +248,71 @@ try to:
           meetingContextById[id].onboardingProfiles = profiles;
           if (
             !meetingContextById[id].participantNames ||
-            meetingContextById[id].participantNames?.length === 0
+  meetingContextById[id].participantNames?.length === 0
           ) {
             meetingContextById[id].participantNames = profiles.map((p) => p.name);
           }
 
           return { session_id: id, count: profiles.length, profiles };
-        } catch (err: any) {
-          return { error: err?.message || 'Failed to fetch profiles' };
-        }
+    } catch (err: any) {
+      return { error: err?.message || 'Failed to fetch profiles' };
+    }
+  },
+}),
+    // Latest diarised transcript snippet for grounding other tools
+    tool({
+      name: 'fetch_transcript_snippet',
+      description:
+        'Returns the latest diarised transcript lines with speaker labels to feed into participant insights.',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'Meeting/session id to fetch transcript for.',
+          },
+          max_utterances: {
+            type: 'number',
+            description: 'How many recent utterances to include (default 12).',
+          },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      async execute(input: any) {
+        const { session_id, max_utterances } = input as {
+          session_id?: string;
+          max_utterances?: number;
+        };
+        const id = session_id || 'cake_meeting';
+        const max = max_utterances && max_utterances > 0 ? max_utterances : 12;
+        const utterances = getTranscriptSnippet(id, max);
+        const text = getTranscriptSnippetText(id, max);
+        return {
+          session_id: id,
+          max_utterances: max,
+          utterance_count: utterances.length,
+          text,
+          utterances,
+        };
+      },
+    }),
+    // Quick recall of latest participant brief
+    tool({
+      name: 'get_participant_brief',
+      description:
+        'Returns the most recent participant brief/suggestions cached from get_participant_insights.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
+      async execute() {
+        const ctx = meetingContextById['cake_meeting'] || {};
+        return {
+          brief: ctx.lastParticipantBrief || '',
+          history_count: ctx.participantInsightsHistory?.length || 0,
+        };
       },
     }),
     // 0) configure the session title and timer
@@ -448,7 +517,11 @@ async execute(input: any) {
   const {
     transcript_snippet,
     participant_names,
-  } = input as { transcript_snippet: string; participant_names?: string[] };
+  } = input as { transcript_snippet?: string; participant_names?: string[] };
+
+  const snippetText =
+    (transcript_snippet || '').trim() ||
+    getTranscriptSnippetText('cake_meeting', 12);
 
   const namesText =
     participant_names && participant_names.length
@@ -530,14 +603,48 @@ Return ONLY a JSON object:
         content: [
           {
             type: 'input_text',
-            text: `Conversation snippet:\n${transcript_snippet}`,
+            text: `Conversation snippet:\n${snippetText}`,
           },
         ],
       },
     ],
   });
 
-  return response.output ?? response;
+  const output = response.output ?? response;
+
+  // cache for quick recall
+  const id = 'cake_meeting';
+  meetingContextById[id] = meetingContextById[id] || {};
+  const history = meetingContextById[id].participantInsightsHistory || [];
+  history.push(output);
+  meetingContextById[id].participantInsightsHistory = history.slice(-5);
+
+  // Build a very short brief for quick recall
+  let brief = '';
+  try {
+    const participants = output.participants || [];
+    const summaries = participants
+      .slice(0, 4)
+      .map((p: any) => `${p.id || p.name || 'Someone'}: ${p.summary || ''}`.trim())
+      .filter(Boolean);
+    const suggestions = (output.suggestions_for_host || []).slice(0, 2);
+    const group = output.group_summary || {};
+    const commonLikes = group.common_likes?.slice(0, 2) || [];
+    brief = [
+      summaries.length ? `People: ${summaries.join('; ')}` : '',
+      commonLikes.length ? `Common likes: ${commonLikes.join(', ')}` : '',
+      suggestions.length ? `Next: ${suggestions.join(' | ')}` : '',
+    ]
+      .filter(Boolean)
+      .join(' — ');
+  } catch {
+    brief = '';
+  }
+  if (brief) {
+    meetingContextById[id].lastParticipantBrief = brief;
+  }
+
+  return output;
 },
     }),
 

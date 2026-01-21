@@ -1,6 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  clearTranscriptForSession,
+  setTranscriptForSession,
+} from "@/app/lib/transcriptStore";
 
 type Utterance = {
   speakerId: string;
@@ -50,6 +54,7 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
 export function useRollingTranscription(sessionId?: string | null) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const prevSessionIdRef = useRef<string | null>(null);
   const lambdaBase = useMemo(() => {
     const trimmed = DEFAULT_LAMBDA_BASE.trim().replace(/\/$/, "");
     return trimmed.endsWith("/default") ? trimmed : `${trimmed}/default`;
@@ -57,6 +62,13 @@ export function useRollingTranscription(sessionId?: string | null) {
 
   useEffect(() => {
     // Reset rolling transcript when the session changes.
+    if (prevSessionIdRef.current) {
+      clearTranscriptForSession(prevSessionIdRef.current);
+    }
+    if (sessionId) {
+      clearTranscriptForSession(sessionId);
+    }
+    prevSessionIdRef.current = sessionId ?? null;
     setJobs([]);
     setError(null);
   }, [sessionId]);
@@ -289,10 +301,27 @@ export function useRollingTranscription(sessionId?: string | null) {
       j.status === "unknown"
   );
 
+  useEffect(() => {
+    if (!sessionId) return;
+    setTranscriptForSession(
+      sessionId,
+      allUtterances.map((u) => ({
+        speakerId: u.speakerId,
+        speakerLabel: u.speakerLabel,
+        start: u.start,
+        end: u.end,
+        text: u.text,
+      })),
+    );
+  }, [allUtterances, sessionId]);
+
   const resetTranscription = useCallback(() => {
     setJobs([]);
     setError(null);
-  }, []);
+    if (sessionId) {
+      clearTranscriptForSession(sessionId);
+    }
+  }, [sessionId]);
 
   return {
     handleAudioChunk,
