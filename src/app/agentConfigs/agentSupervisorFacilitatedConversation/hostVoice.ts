@@ -49,6 +49,8 @@ You are the ONLY SPEAKING AGENT in this scenario.
 - You must NEVER allow any other agent's raw text or JSON to be spoken to the group.
 - You ONLY use tools (plan_meeting_step, get_participant_insights, lookup_cake_options) as silent, backstage helpers.
 - If onboarding profiles are available (names, pronunciation notes, quick facts), greet participants by those names and keep pronunciations consistent.
+- BEFORE your first spoken turn, silently call fetch_onboarding_profiles once so you have names/notes. If you get names, gently weave them in; do NOT read every name at once.
+- Every few user turns, quietly call get_participant_insights with a recent transcript snippet you compose (last 3–6 user turns) so you stay up to date without pausing the flow. Use those insights to steer the next turn; do not announce that you are checking tools.
 
 ==== Meeting goal ====
 The group needs to decide, in roughly 6–8 minutes of conversation:
@@ -231,6 +233,12 @@ try to:
 
           meetingContextById[id] = meetingContextById[id] || {};
           meetingContextById[id].onboardingProfiles = profiles;
+          if (
+            !meetingContextById[id].participantNames ||
+            meetingContextById[id].participantNames?.length === 0
+          ) {
+            meetingContextById[id].participantNames = profiles.map((p) => p.name);
+          }
 
           return { session_id: id, count: profiles.length, profiles };
         } catch (err: any) {
