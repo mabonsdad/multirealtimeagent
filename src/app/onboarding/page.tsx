@@ -8,6 +8,7 @@ import type { SessionStatus } from "../types";
 import { EventProvider } from "../contexts/EventContext";
 import { TranscriptProvider } from "../contexts/TranscriptContext";
 import { useTranscript } from "../contexts/TranscriptContext";
+import { useRef } from "react";
 
 type ProfileResult = {
   profileId?: string;
@@ -37,11 +38,13 @@ function OnboardingContent() {
   const [chatStatus, setChatStatus] = useState<SessionStatus>("DISCONNECTED");
   const [chatMessage, setChatMessage] = useState<string | null>(null);
   const [autoSummary, setAutoSummary] = useState<string>("");
+  const [pendingAutoSubmit, setPendingAutoSubmit] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const { transcriptItems } = useTranscript();
+  const lastAssistantProcessedRef = useRef<string | null>(null);
 
   const {
     connect,
@@ -207,6 +210,10 @@ function OnboardingContent() {
         setAudioBlob(processed);
         setStatus("Captured sample. You can play it back or submit.");
         stream.getTracks().forEach((t) => t.stop());
+        if (pendingAutoSubmit) {
+          setPendingAutoSubmit(false);
+          submitProfile(processed);
+        }
       };
 
       mediaRecorder.start();
@@ -291,6 +298,29 @@ participant_name: ${name.trim()}
     setChatMessage("Chat ended.");
   };
 
+  useEffect(() => {
+    const lastAssistant = [...transcriptItems]
+      .filter((t) => t.role === "assistant" && t.title)
+      .pop();
+    if (!lastAssistant || lastAssistant.itemId === lastAssistantProcessedRef.current) return;
+    lastAssistantProcessedRef.current = lastAssistant.itemId;
+
+    const text = lastAssistant.title || "";
+    const isLongQuestion =
+      text.length > 40 &&
+      (text.includes("?") ||
+        /describe|would you like|get out of the session|briefly/i.test(text));
+    if (isLongQuestion && !isRecording) {
+      startRecording();
+    }
+    const isGoodbye = /goodbye|thanks for|looking forward|speak soon|bye\b/i.test(text);
+    if (isGoodbye && (isRecording || chatStatus === "CONNECTED")) {
+      setPendingAutoSubmit(true);
+      stopRecording();
+      stopGuidedChat();
+    }
+  }, [transcriptItems, isRecording, chatStatus]);
+
   const stopRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       mediaRecorderRef.current.stop();
@@ -298,8 +328,9 @@ participant_name: ${name.trim()}
     }
   };
 
-  const submitProfile = async () => {
-    if (!audioBlob) {
+  const submitProfile = async (blobOverride?: Blob) => {
+    const finalBlob = blobOverride || audioBlob;
+    if (!finalBlob) {
       setError("Record an audio sample first.");
       return;
     }
@@ -311,7 +342,7 @@ participant_name: ${name.trim()}
       const derivedSummary = buildTranscriptSummary();
       setStatus("Uploading profile to Transkriptor...");
       setError(null);
-      const base64 = await blobToBase64(audioBlob);
+      const base64 = await blobToBase64(finalBlob);
       const resp = await fetch("/api/transkriptor/profiles", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
