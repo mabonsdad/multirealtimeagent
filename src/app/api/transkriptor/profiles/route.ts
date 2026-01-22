@@ -17,6 +17,10 @@ export const config = {
   },
 };
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+
 type ProfileRecord = {
   profileKey: string;
   speakerName: string;
@@ -190,18 +194,31 @@ export async function POST(request: Request) {
     }
 
     // Step 2: upload audio to presigned URL
-    const putResp = await fetch(uploadUrl, {
-      method: "PUT",
-      headers: { "Content-Type": "application/octet-stream" },
-      body: audioBuffer,
-    });
-    if (!putResp.ok) {
-      const body = await putResp.text();
+    let transkriptorUploadOk = false;
+    try {
+      const putResp = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: audioBuffer,
+      });
+      if (putResp.ok) {
+        transkriptorUploadOk = true;
+      } else {
+        const body = await putResp.text();
+        return NextResponse.json(
+          {
+            error: "Failed to upload audio to presigned URL",
+            status: putResp.status,
+            body,
+          },
+          { status: 502 },
+        );
+      }
+    } catch (err: any) {
       return NextResponse.json(
         {
-          error: "Failed to upload audio to presigned URL",
-          status: putResp.status,
-          body,
+          error: "Upload to Transkriptor presigned URL threw",
+          details: err?.message || String(err),
         },
         { status: 502 },
       );
@@ -221,14 +238,22 @@ export async function POST(request: Request) {
     const metaKey = `${PROFILE_PREFIX}/${profileKey}/meta.json`;
 
     const client = getS3Client();
-    await client.send(
-      new PutObjectCommand({
-        Bucket: S3_BUCKET,
-        Key: audioKey,
-        Body: audioBuffer,
-        ContentType: "audio/webm",
-      }),
-    );
+    try {
+      await client.send(
+        new PutObjectCommand({
+          Bucket: S3_BUCKET,
+          Key: audioKey,
+          Body: audioBuffer,
+          ContentType: "audio/webm",
+        }),
+      );
+    } catch (err: any) {
+      console.error("S3 upload failed", err);
+      return NextResponse.json(
+        { error: "Failed to store audio in S3", details: err?.message || err },
+        { status: 500 },
+      );
+    }
 
     const record: ProfileRecord = {
       profileKey,
@@ -260,7 +285,11 @@ export async function POST(request: Request) {
   } catch (err: any) {
     console.error("Create profile failed", err);
     return NextResponse.json(
-      { error: "Failed to create profile", details: err?.data || err?.message },
+      {
+        error: "Failed to create profile",
+        details: err?.data || err?.message,
+        stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+      },
       { status: 500 },
     );
   }
