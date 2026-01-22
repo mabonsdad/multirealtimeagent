@@ -323,7 +323,9 @@ participant_name: ${name.trim()}
       });
       const data = await resp.json();
       if (!resp.ok) {
-        throw new Error(data?.error || "Upload failed");
+        const msg = data?.error || "Upload failed";
+        const details = data?.details ? `: ${data.details}` : "";
+        throw new Error(`${msg}${details}`);
       }
       setResult({
         profileId: data.profileId,

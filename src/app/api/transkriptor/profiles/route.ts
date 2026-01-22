@@ -247,7 +247,11 @@ export async function POST(request: Request) {
     } catch (err: any) {
       console.error("S3 upload failed", err);
       return NextResponse.json(
-        { error: "Failed to store audio in S3", details: err?.message || err },
+        {
+          error: "Failed to store audio in S3",
+          details: err?.message || err,
+          code: err?.name,
+        },
         { status: 500 },
       );
     }
@@ -285,6 +289,7 @@ export async function POST(request: Request) {
       {
         error: "Failed to create profile",
         details: err?.data || err?.message,
+        code: err?.name,
         stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
       },
       { status: 500 },
