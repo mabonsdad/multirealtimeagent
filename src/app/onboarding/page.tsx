@@ -7,6 +7,7 @@ import { useRealtimeSession } from "../hooks/useRealtimeSession";
 import type { SessionStatus } from "../types";
 import { EventProvider } from "../contexts/EventContext";
 import { TranscriptProvider } from "../contexts/TranscriptContext";
+import { useTranscript } from "../contexts/TranscriptContext";
 
 type ProfileResult = {
   profileId?: string;
@@ -33,13 +34,14 @@ function OnboardingContent() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ProfileResult | null>(null);
-  const [summary, setSummary] = useState("");
   const [chatStatus, setChatStatus] = useState<SessionStatus>("DISCONNECTED");
   const [chatMessage, setChatMessage] = useState<string | null>(null);
+  const [autoSummary, setAutoSummary] = useState<string>("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const { transcriptItems } = useTranscript();
 
   const {
     connect,
@@ -68,6 +70,119 @@ function OnboardingContent() {
     };
   }, []);
 
+  const buildTranscriptSummary = () => {
+    const userLines = transcriptItems
+      .filter((t) => t.role === "user" && t.title)
+      .map((t) => t.title);
+    const joined = userLines.join(" ");
+    // keep it short
+    const short = joined.slice(0, 400);
+    setAutoSummary(short);
+    return short;
+  };
+
+  const encodeWavFromFloat = (float32: Float32Array, sampleRate: number) => {
+    const buffer = new ArrayBuffer(44 + float32.length * 2);
+    const view = new DataView(buffer);
+    const writeString = (offset: number, str: string) => {
+      for (let i = 0; i < str.length; i++) {
+        view.setUint8(offset + i, str.charCodeAt(i));
+      }
+    };
+
+    const floatTo16BitPCM = (output: DataView, offset: number, input: Float32Array) => {
+      for (let i = 0; i < input.length; i++, offset += 2) {
+        let s = Math.max(-1, Math.min(1, input[i]));
+        output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      }
+    };
+
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + float32.length * 2, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, "data");
+    view.setUint32(40, float32.length * 2, true);
+
+    floatTo16BitPCM(view, 44, float32);
+    return new Blob([view], { type: "audio/wav" });
+  };
+
+  const trimAndCompactSilence = async (blob: Blob): Promise<Blob> => {
+    try {
+      const arrayBuffer = await blob.arrayBuffer();
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      const channel = audioBuffer.getChannelData(0);
+      const sampleRate = audioBuffer.sampleRate;
+      const threshold = 0.01;
+      const minSilenceSamples = Math.floor(sampleRate * 0.35);
+      const minChunkSamples = Math.floor(sampleRate * 0.2);
+      const padSamples = Math.floor(sampleRate * 0.05);
+
+      let segments: Array<{ start: number; end: number }> = [];
+      let inSpeech = false;
+      let segStart = 0;
+      let silenceRun = 0;
+
+      for (let i = 0; i < channel.length; i++) {
+        const sample = channel[i];
+        const isVoiced = Math.abs(sample) > threshold;
+        if (isVoiced) {
+          silenceRun = 0;
+          if (!inSpeech) {
+            inSpeech = true;
+            segStart = Math.max(0, i - padSamples);
+          }
+        } else if (inSpeech) {
+          silenceRun++;
+          if (silenceRun > minSilenceSamples) {
+            const segEnd = Math.min(channel.length, i + padSamples);
+            if (segEnd - segStart > minChunkSamples) {
+              segments.push({ start: segStart, end: segEnd });
+            }
+            inSpeech = false;
+          }
+        }
+      }
+      if (inSpeech) {
+        const segEnd = channel.length;
+        if (segEnd - segStart > minChunkSamples) {
+          segments.push({ start: segStart, end: segEnd });
+        }
+      }
+
+      if (!segments.length) {
+        return blob;
+      }
+
+      const totalLength =
+        segments.reduce((acc, s) => acc + (s.end - s.start), 0) +
+        (segments.length - 1) * padSamples;
+      const out = new Float32Array(totalLength);
+      let offset = 0;
+      segments.forEach((s, idx) => {
+        out.set(channel.subarray(s.start, s.end), offset);
+        offset += s.end - s.start;
+        if (idx < segments.length - 1) {
+          offset += padSamples; // small gap
+        }
+      });
+
+      return encodeWavFromFloat(out, sampleRate);
+    } catch (err) {
+      console.warn("Silence trim failed, using original blob", err);
+      return blob;
+    }
+  };
+
   const startRecording = async () => {
     try {
       setError(null);
@@ -76,7 +191,7 @@ function OnboardingContent() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: "audio/webm;codecs=opus",
-        audioBitsPerSecond: 64000,
+        audioBitsPerSecond: 128000,
       });
       chunksRef.current = [];
 
@@ -86,9 +201,10 @@ function OnboardingContent() {
         }
       };
 
-      mediaRecorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        setAudioBlob(blob);
+      mediaRecorder.onstop = async () => {
+        const rawBlob = new Blob(chunksRef.current, { type: "audio/webm" });
+        const processed = await trimAndCompactSilence(rawBlob);
+        setAudioBlob(processed);
         setStatus("Captured sample. You can play it back or submit.");
         stream.getTracks().forEach((t) => t.stop());
       };
@@ -192,6 +308,7 @@ participant_name: ${name.trim()}
       return;
     }
     try {
+      const derivedSummary = buildTranscriptSummary();
       setStatus("Uploading profile to Transkriptor...");
       setError(null);
       const base64 = await blobToBase64(audioBlob);
@@ -201,7 +318,7 @@ participant_name: ${name.trim()}
         body: JSON.stringify({
           speakerName: name.trim(),
           audioBase64: base64,
-          profileSummary: summary.trim() || undefined,
+          profileSummary: derivedSummary || undefined,
         }),
       });
       const data = await resp.json();
@@ -212,7 +329,7 @@ participant_name: ${name.trim()}
         profileId: data.profileId,
         profileKey: data.profileKey,
         speakerName: data.speakerName,
-        profileSummary: summary.trim() || undefined,
+        profileSummary: derivedSummary || undefined,
       });
       setStatus("Profile created and stored.");
     } catch (err: any) {
@@ -239,19 +356,6 @@ participant_name: ${name.trim()}
               placeholder="Alex Rivera"
             />
           </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">Profile notes (optional)</label>
-            <textarea
-              value={summary}
-              onChange={(e) => setSummary(e.target.value)}
-              className="w-full border rounded-lg px-3 py-2 text-sm"
-              rows={3}
-              placeholder="e.g., prefers being called Alex; early-career designer; excited but a bit nervous."
-            />
-            <p className="text-xs text-gray-500">
-              Quick facts to store with your voice (pronouns, interests, life stage, goals for the session).
-            </p>
-          </div>
           <div className="flex gap-3 flex-wrap">
             <button
               onClick={startGuidedChat}
@@ -261,11 +365,14 @@ participant_name: ${name.trim()}
               {rtStatus === "CONNECTING" ? "Connecting..." : "Start guided chat"}
             </button>
             <button
-              onClick={stopRecording}
-              disabled={!isRecording}
+              onClick={() => {
+                stopRecording();
+                stopGuidedChat();
+              }}
+              disabled={!isRecording && rtStatus !== "CONNECTED"}
               className="px-4 py-2 rounded-lg bg-gray-800 text-white text-sm disabled:opacity-50"
             >
-              Stop
+              Stop & end chat
             </button>
             <button
               onClick={submitProfile}
@@ -280,23 +387,6 @@ participant_name: ${name.trim()}
             <div>Connection: {chatStatus}</div>
             {chatMessage && <div>{chatMessage}</div>}
             {isRecording && <div className="text-emerald-700">Recording mic sample…</div>}
-            {rtStatus === "CONNECTED" && (
-              <button
-                onClick={stopGuidedChat}
-                className="mt-2 px-3 py-1.5 rounded bg-gray-200 text-gray-800 text-xs"
-              >
-                End chat
-              </button>
-            )}
-          </div>
-          <div className="bg-gray-50 border rounded-lg p-3 text-xs text-gray-700 space-y-1">
-            <div className="font-semibold">Guided chat flow (what the AI will do)</div>
-            <ul className="list-disc list-inside space-y-1">
-              <li>Greet you by name, check pronunciation; ask you to say your name once.</li>
-              <li>Ask: “How would you briefly describe yourself and where you are in life?”</li>
-              <li>Ask: “What would you like to get out of the session?” with a light follow-up if short.</li>
-              <li>End with a thank you and goodbye. We record only your mic (AI voice excluded).</li>
-            </ul>
           </div>
           {status && <div className="text-sm text-emerald-700">{status}</div>}
           {error && <div className="text-sm text-red-600">{error}</div>}
@@ -312,6 +402,12 @@ participant_name: ${name.trim()}
               {result.profileId && <div>Transkriptor profile ID: {result.profileId}</div>}
               {result.profileKey && <div>Local profile key: {result.profileKey}</div>}
               {result.profileSummary && <div>Notes: {result.profileSummary}</div>}
+            </div>
+          )}
+          {autoSummary && !result && (
+            <div className="border rounded-lg p-3 bg-gray-50 text-sm text-gray-800">
+              <div className="font-semibold">Auto summary (preview)</div>
+              <div>{autoSummary}</div>
             </div>
           )}
         </div>
