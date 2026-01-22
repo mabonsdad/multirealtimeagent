@@ -9,6 +9,14 @@ import {
 import { Readable } from "stream";
 import { randomUUID } from "crypto";
 
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: "10mb",
+    },
+  },
+};
+
 type ProfileRecord = {
   profileKey: string;
   speakerName: string;
