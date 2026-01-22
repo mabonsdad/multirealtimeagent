@@ -42,9 +42,14 @@ const TRANSKRIPTOR_BASE =
 const S3_BUCKET = process.env.TRANSKRIPTOR_S3_BUCKET || process.env.S3_BUCKET;
 const S3_REGION = process.env.AWS_REGION || "eu-west-2";
 const PROFILE_PREFIX = "chatbot-livetranscribe/profiles";
-const S3_ACCESS_KEY_ID = process.env.S3_BUCKET_ACCESS_KEY_ID;
-const S3_SECRET_ACCESS_KEY = process.env.S3_BUCKET_SECRET_ACCESS_KEY || process.env.S3_SECRET_ACCESS_KEY;
-const S3_SESSION_TOKEN = process.env.S3_BUCKET_SESSION_TOKEN;
+const S3_ACCESS_KEY_ID =
+  process.env.S3_BUCKET_ACCESS_KEY_ID ||
+  process.env.S3_ACCESS_KEY_ID;
+const S3_SECRET_ACCESS_KEY =
+  process.env.S3_BUCKET_SECRET_ACCESS_KEY ||
+  process.env.S3_SECRET_ACCESS_KEY;
+const S3_SESSION_TOKEN =
+  process.env.S3_BUCKET_SESSION_TOKEN || process.env.S3_SESSION_TOKEN;
 
 function getS3Client() {
   const creds =
