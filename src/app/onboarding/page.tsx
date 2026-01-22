@@ -26,7 +26,7 @@ const blobToBase64 = (blob: Blob): Promise<string> =>
     reader.readAsDataURL(blob);
   });
 
-export default function OnboardingPage() {
+function OnboardingContent() {
   const [name, setName] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
@@ -222,7 +222,7 @@ participant_name: ${name.trim()}
     }
   };
 
-  const content = (
+  return (
     <div className="min-h-screen bg-gray-100 text-gray-900">
       <div className="max-w-3xl mx-auto px-6 py-10 space-y-6">
         <div className="bg-white shadow-sm rounded-2xl p-6 space-y-4">
@@ -318,10 +318,14 @@ participant_name: ${name.trim()}
       </div>
     </div>
   );
+}
 
+export default function OnboardingPage() {
   return (
     <EventProvider>
-      <TranscriptProvider>{content}</TranscriptProvider>
+      <TranscriptProvider>
+        <OnboardingContent />
+      </TranscriptProvider>
     </EventProvider>
   );
 }
