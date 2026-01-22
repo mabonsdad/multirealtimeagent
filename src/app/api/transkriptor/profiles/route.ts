@@ -194,16 +194,13 @@ export async function POST(request: Request) {
     }
 
     // Step 2: upload audio to presigned URL
-    let transkriptorUploadOk = false;
     try {
       const putResp = await fetch(uploadUrl, {
         method: "PUT",
         headers: { "Content-Type": "application/octet-stream" },
         body: audioBuffer,
       });
-      if (putResp.ok) {
-        transkriptorUploadOk = true;
-      } else {
+      if (!putResp.ok) {
         const body = await putResp.text();
         return NextResponse.json(
           {
