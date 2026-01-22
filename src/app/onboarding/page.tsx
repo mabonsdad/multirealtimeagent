@@ -92,10 +92,10 @@ function OnboardingContent() {
 
     const floatTo16BitPCM = (output: DataView, offset: number, input: Float32Array) => {
       for (let i = 0; i < input.length; i++, offset += 2) {
-        let s = Math.max(-1, Math.min(1, input[i]));
-        output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-      }
-    };
+      const s = Math.max(-1, Math.min(1, input[i]));
+      output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+  };
 
     writeString(0, "RIFF");
     view.setUint32(4, 36 + float32.length * 2, true);
@@ -127,7 +127,7 @@ function OnboardingContent() {
       const minChunkSamples = Math.floor(sampleRate * 0.2);
       const padSamples = Math.floor(sampleRate * 0.05);
 
-      let segments: Array<{ start: number; end: number }> = [];
+      const segments: Array<{ start: number; end: number }> = [];
       let inSpeech = false;
       let segStart = 0;
       let silenceRun = 0;
