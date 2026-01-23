@@ -407,7 +407,7 @@ participant_name: ${name.trim()}
               Stop & end chat
             </button>
             <button
-              onClick={submitProfile}
+              onClick={() => submitProfile()}
               disabled={!audioBlob || isRecording}
               className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm disabled:opacity-50"
             >
