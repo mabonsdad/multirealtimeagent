@@ -40,8 +40,6 @@ function OnboardingContent() {
   const [chatMessage, setChatMessage] = useState<string | null>(null);
   const [autoSummary, setAutoSummary] = useState<string>("");
   const [isAutoSubmitting, setIsAutoSubmitting] = useState(false);
-  const [recordingStartMs, setRecordingStartMs] = useState<number | null>(null);
-  const [firstLongQuestionMs, setFirstLongQuestionMs] = useState<number | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -49,6 +47,9 @@ function OnboardingContent() {
   const { transcriptItems } = useTranscript();
   const pendingAutoSubmitRef = useRef(false);
   const lastAssistantProcessedRef = useRef<string | null>(null);
+  const recordingStartRef = useRef<number | null>(null);
+  const firstLongQuestionRef = useRef<number | null>(null);
+  const audioBlobRef = useRef<Blob | null>(null);
 
   const {
     connect,
@@ -266,8 +267,8 @@ function OnboardingContent() {
         audioBitsPerSecond: 128000,
       });
       chunksRef.current = [];
-      setRecordingStartMs(Date.now());
-      setFirstLongQuestionMs(null);
+      recordingStartRef.current = Date.now();
+      firstLongQuestionRef.current = null;
 
       mediaRecorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
@@ -278,11 +279,12 @@ function OnboardingContent() {
       mediaRecorder.onstop = async () => {
         const rawBlob = new Blob(chunksRef.current, { type: "audio/webm" });
         const offsetMs =
-          recordingStartMs && firstLongQuestionMs
-            ? Math.max(0, firstLongQuestionMs - recordingStartMs)
+          recordingStartRef.current && firstLongQuestionRef.current
+            ? Math.max(0, firstLongQuestionRef.current - recordingStartRef.current)
             : 0;
         const processed = await trimAndCompactSilence(rawBlob, offsetMs);
         setAudioBlob(processed);
+        audioBlobRef.current = processed;
         setStatus("Captured sample. Preparing to save...");
         stream.getTracks().forEach((t) => t.stop());
         if (pendingAutoSubmitRef.current) {
@@ -388,22 +390,34 @@ participant_name: ${name.trim()}
       (text.includes("?") ||
         /describe|would you like|get out of the session|briefly/i.test(text));
     const isNameCheck = /name|pronounc/i.test(text);
-    if (isLongQuestion && !isNameCheck && !firstLongQuestionMs) {
-      setFirstLongQuestionMs(Date.now());
+    if (isLongQuestion && !isNameCheck && !firstLongQuestionRef.current) {
+      firstLongQuestionRef.current = Date.now();
       setStatus("Recording answer...");
     }
-  }, [transcriptItems, firstLongQuestionMs]);
+  }, [transcriptItems]);
 
   const finalizeAndSubmit = () => {
     if (isAutoSubmitting) return;
     setStatus("Finalizing recording and saving...");
+    pendingAutoSubmitRef.current = true;
+    const blobReady = audioBlobRef.current || audioBlob;
     if (isRecording) {
-      pendingAutoSubmitRef.current = true;
       stopRecording();
-    } else if (audioBlob) {
-      submitProfile(audioBlob);
+    } else if (blobReady) {
+      pendingAutoSubmitRef.current = false;
+      submitProfile(blobReady);
     } else {
-      setError("No recording captured yet.");
+      // give the recorder a moment to finish
+      setTimeout(() => {
+        const laterBlob = audioBlobRef.current || audioBlob;
+        if (laterBlob) {
+          pendingAutoSubmitRef.current = false;
+          submitProfile(laterBlob);
+        } else {
+          pendingAutoSubmitRef.current = false;
+          setError("No recording captured yet. Please allow microphone access and try again.");
+        }
+      }, 600);
     }
     stopGuidedChat();
   };
