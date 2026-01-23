@@ -268,10 +268,11 @@ function OnboardingContent() {
         const rawBlob = new Blob(chunksRef.current, { type: "audio/webm" });
         const processed = await trimAndCompactSilence(rawBlob);
         setAudioBlob(processed);
-        setStatus("Captured sample. You can play it back or submit.");
+        setStatus("Captured sample. Preparing to save...");
         stream.getTracks().forEach((t) => t.stop());
         if (pendingAutoSubmit) {
           setPendingAutoSubmit(false);
+          setStatus("Saving profile...");
           submitProfile(processed);
         }
       };
@@ -353,6 +354,20 @@ participant_name: ${name.trim()}
     setChatMessage("Chat ended.");
   };
 
+  const finalizeAndSubmit = () => {
+    if (isAutoSubmitting) return;
+    setStatus("Finalizing recording and saving...");
+    if (isRecording) {
+      setPendingAutoSubmit(true);
+      stopRecording();
+    } else if (audioBlob) {
+      submitProfile(audioBlob);
+    } else {
+      setError("No recording captured yet.");
+    }
+    stopGuidedChat();
+  };
+
   useEffect(() => {
     const lastAssistant = [...transcriptItems]
       .filter((t) => t.role === "assistant" && t.title)
@@ -373,10 +388,7 @@ participant_name: ${name.trim()}
     }
     const isGoodbye = /goodbye|thanks for|looking forward|speak soon|bye\b/i.test(text);
     if (isGoodbye && (isRecording || chatStatus === "CONNECTED")) {
-      setPendingAutoSubmit(true);
-      setStatus("Finalizing recording and saving...");
-      stopRecording();
-      stopGuidedChat();
+      finalizeAndSubmit();
     }
   }, [transcriptItems, isRecording, chatStatus]);
 
@@ -460,21 +472,11 @@ participant_name: ${name.trim()}
               {rtStatus === "CONNECTING" ? "Connecting..." : "Start guided chat"}
             </button>
             <button
-              onClick={() => {
-                stopRecording();
-                stopGuidedChat();
-              }}
-              disabled={!isRecording && rtStatus !== "CONNECTED"}
+              onClick={finalizeAndSubmit}
+              disabled={isAutoSubmitting || chatStatus === "DISCONNECTED"}
               className="px-4 py-2 rounded-lg bg-gray-800 text-white text-sm disabled:opacity-50"
             >
-              Stop & end chat
-            </button>
-            <button
-              onClick={() => submitProfile()}
-              disabled={!audioBlob || isRecording || isAutoSubmitting}
-              className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm disabled:opacity-50"
-            >
-              {isAutoSubmitting ? "Submitting..." : "Submit to Transkriptor"}
+              {isAutoSubmitting ? "Saving..." : "Stop & End Chat"}
             </button>
           </div>
           <div className="bg-gray-50 border rounded-lg p-3 text-xs text-gray-700 space-y-1">
