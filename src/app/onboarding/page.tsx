@@ -39,13 +39,14 @@ function OnboardingContent() {
   const [chatStatus, setChatStatus] = useState<SessionStatus>("DISCONNECTED");
   const [chatMessage, setChatMessage] = useState<string | null>(null);
   const [autoSummary, setAutoSummary] = useState<string>("");
-  const [pendingAutoSubmit, setPendingAutoSubmit] = useState(false);
   const [isAutoSubmitting, setIsAutoSubmitting] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const { transcriptItems } = useTranscript();
+  const pendingAutoSubmitRef = useRef(false);
+  const lastAssistantProcessedRef = useRef<string | null>(null);
 
   const {
     connect,
@@ -269,8 +270,8 @@ function OnboardingContent() {
         setAudioBlob(processed);
         setStatus("Captured sample. Preparing to save...");
         stream.getTracks().forEach((t) => t.stop());
-        if (pendingAutoSubmit) {
-          setPendingAutoSubmit(false);
+        if (pendingAutoSubmitRef.current) {
+          pendingAutoSubmitRef.current = false;
           setStatus("Saving profile...");
           submitProfile(processed);
         }
@@ -341,10 +342,7 @@ participant_name: ${name.trim()}
         },
       });
       sendEvent({ type: "response.create" });
-      // Start recording immediately so the user doesn't miss the response window.
-      if (!isRecording) {
-        startRecording();
-      }
+      setStatus("Waiting for the first question...");
     } catch (err) {
       console.error("Guided chat start error", err);
       setChatMessage("Failed to start guided chat. Please retry.");
@@ -361,7 +359,7 @@ participant_name: ${name.trim()}
     if (isAutoSubmitting) return;
     setStatus("Finalizing recording and saving...");
     if (isRecording) {
-      setPendingAutoSubmit(true);
+      pendingAutoSubmitRef.current = true;
       stopRecording();
     } else if (audioBlob) {
       submitProfile(audioBlob);
@@ -370,6 +368,25 @@ participant_name: ${name.trim()}
     }
     stopGuidedChat();
   };
+
+  useEffect(() => {
+    const lastAssistant = [...transcriptItems]
+      .filter((t) => t.role === "assistant" && t.title)
+      .pop();
+    if (!lastAssistant || lastAssistant.itemId === lastAssistantProcessedRef.current) return;
+    lastAssistantProcessedRef.current = lastAssistant.itemId;
+
+    const text = lastAssistant.title || "";
+    const isLongQuestion =
+      text.length > 40 &&
+      (text.includes("?") ||
+        /describe|would you like|get out of the session|briefly/i.test(text));
+    const isNameCheck = /name|pronounc/i.test(text);
+    if (isLongQuestion && !isRecording && !isNameCheck) {
+      setStatus("Recording answer...");
+      startRecording();
+    }
+  }, [transcriptItems, isRecording]);
 
 
   const stopRecording = () => {
