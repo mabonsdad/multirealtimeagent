@@ -46,7 +46,6 @@ function OnboardingContent() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const { transcriptItems } = useTranscript();
-  const lastAssistantProcessedRef = useRef<string | null>(null);
 
   const {
     connect,
@@ -342,6 +341,10 @@ participant_name: ${name.trim()}
         },
       });
       sendEvent({ type: "response.create" });
+      // Start recording immediately so the user doesn't miss the response window.
+      if (!isRecording) {
+        startRecording();
+      }
     } catch (err) {
       console.error("Guided chat start error", err);
       setChatMessage("Failed to start guided chat. Please retry.");
@@ -368,29 +371,6 @@ participant_name: ${name.trim()}
     stopGuidedChat();
   };
 
-  useEffect(() => {
-    const lastAssistant = [...transcriptItems]
-      .filter((t) => t.role === "assistant" && t.title)
-      .pop();
-    if (!lastAssistant || lastAssistant.itemId === lastAssistantProcessedRef.current) return;
-    lastAssistantProcessedRef.current = lastAssistant.itemId;
-
-    const text = lastAssistant.title || "";
-    const isLongQuestion =
-      text.length > 40 &&
-      (text.includes("?") ||
-        /describe|would you like|get out of the session|briefly/i.test(text));
-    const isNameCheck = /name|pronounc/i.test(text);
-    if (isLongQuestion && !isRecording) {
-      if (isNameCheck) return;
-      setStatus("Recording answer...");
-      startRecording();
-    }
-    const isGoodbye = /goodbye|thanks for|looking forward|speak soon|bye\b/i.test(text);
-    if (isGoodbye && (isRecording || chatStatus === "CONNECTED")) {
-      finalizeAndSubmit();
-    }
-  }, [transcriptItems, isRecording, chatStatus]);
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {

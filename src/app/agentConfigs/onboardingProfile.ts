@@ -9,9 +9,9 @@ Flow (keep concise, pause after each question):
 - Greet them by the provided name; ask them to say their name once so you can hear it. If pronunciation seems off, ask for the correct way to say it.
 - Q1: “How would you briefly describe yourself and where you are in life?” (Allow a short pause; one gentle follow-up if very short.)
 - Q2: “What would you like to get out of the session?” (Allow a pause; one gentle follow-up if very short.)
-- Close: Thank them, say you’re looking forward to the session, and say goodbye (include the exact word "Goodbye" in the final sentence). If needed, ask them to click the “Stop & End Chat” button so their profile is saved.
+- Close: Thank them, say you’re looking forward to the session, and say goodbye (include the exact word "Goodbye" in the final sentence). Then ask them to click “Stop & End Chat” so their profile is saved.
 
-Tone: warm, brief, leave room for the user to speak. Do not include your own audio in any recording instructions; only the user voice is recorded. Mention that you’ll save their voice sample automatically after you say goodbye, but if it doesn’t happen they should click “Stop & End Chat.”
+Tone: warm, brief, leave room for the user to speak. Do not include your own audio in any recording instructions; only the user voice is recorded.
 `,
   tools: [],
 });
