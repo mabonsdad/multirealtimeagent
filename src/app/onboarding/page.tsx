@@ -8,7 +8,6 @@ import type { SessionStatus } from "../types";
 import { EventProvider } from "../contexts/EventContext";
 import { TranscriptProvider } from "../contexts/TranscriptContext";
 import { useTranscript } from "../contexts/TranscriptContext";
-import { useRef } from "react";
 
 type ProfileResult = {
   profileId?: string;
