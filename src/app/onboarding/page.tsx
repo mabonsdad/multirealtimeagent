@@ -16,6 +16,8 @@ type ProfileResult = {
   profileSummary?: string;
 };
 
+const SUMMARY_MODEL = "gpt-4.1-mini";
+
 const blobToBase64 = (blob: Blob): Promise<string> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -38,6 +40,7 @@ function OnboardingContent() {
   const [chatMessage, setChatMessage] = useState<string | null>(null);
   const [autoSummary, setAutoSummary] = useState<string>("");
   const [pendingAutoSubmit, setPendingAutoSubmit] = useState(false);
+  const [isAutoSubmitting, setIsAutoSubmitting] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -72,15 +75,73 @@ function OnboardingContent() {
     };
   }, []);
 
-  const buildTranscriptSummary = () => {
+  const buildTranscriptText = () => {
     const userLines = transcriptItems
       .filter((t) => t.role === "user" && t.title)
       .map((t) => t.title);
-    const joined = userLines.join(" ");
-    // keep it short
-    const short = joined.slice(0, 400);
-    setAutoSummary(short);
-    return short;
+    return userLines.join(" ");
+  };
+
+  const generateProfileSummary = async () => {
+    const transcriptText = buildTranscriptText();
+    const fallback = name.trim()
+      ? `${name.trim()} is a participant who shared some background and their goals for the session.`
+      : "The participant shared background and goals for the session.";
+
+    if (!transcriptText.trim()) {
+      setAutoSummary(fallback);
+      return fallback;
+    }
+
+    try {
+      const response = await fetch("/api/responses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: SUMMARY_MODEL,
+          input: [
+            {
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text:
+                    "Summarize the onboarding conversation in ONE concise sentence. " +
+                    "Use the format: \"[name] is a [paraphrased self-description], and their interest in the session is [paraphrased goal].\" " +
+                    "Do NOT quote verbatim. If details are missing, say \"they didn't share\" for that part.",
+                },
+              ],
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: `Name provided: ${name.trim() || "Unknown"}\nUser transcript: ${transcriptText}`,
+                },
+              ],
+            },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        setAutoSummary(fallback);
+        return fallback;
+      }
+      const data = await response.json();
+      const summary =
+        data?.output
+          ?.find((i: any) => i.type === "message" && i.role === "assistant")
+          ?.content?.find((c: any) => c.type === "output_text")?.text ?? "";
+      const cleaned = summary.trim();
+      setAutoSummary(cleaned || fallback);
+      return cleaned || fallback;
+    } catch (err) {
+      console.warn("Summary generation failed", err);
+      setAutoSummary(fallback);
+      return fallback;
+    }
   };
 
   const encodeWavFromFloat = (float32: Float32Array, sampleRate: number) => {
@@ -280,11 +341,6 @@ participant_name: ${name.trim()}
         },
       });
       sendEvent({ type: "response.create" });
-
-      // Start recording their mic-only sample alongside the chat
-      if (!isRecording) {
-        startRecording();
-      }
     } catch (err) {
       console.error("Guided chat start error", err);
       setChatMessage("Failed to start guided chat. Please retry.");
@@ -309,12 +365,16 @@ participant_name: ${name.trim()}
       text.length > 40 &&
       (text.includes("?") ||
         /describe|would you like|get out of the session|briefly/i.test(text));
+    const isNameCheck = /name|pronounc/i.test(text);
     if (isLongQuestion && !isRecording) {
+      if (isNameCheck) return;
+      setStatus("Recording answer...");
       startRecording();
     }
     const isGoodbye = /goodbye|thanks for|looking forward|speak soon|bye\b/i.test(text);
     if (isGoodbye && (isRecording || chatStatus === "CONNECTED")) {
       setPendingAutoSubmit(true);
+      setStatus("Finalizing recording and saving...");
       stopRecording();
       stopGuidedChat();
     }
@@ -338,7 +398,8 @@ participant_name: ${name.trim()}
       return;
     }
     try {
-      const derivedSummary = buildTranscriptSummary();
+      setIsAutoSubmitting(true);
+      const derivedSummary = await generateProfileSummary();
       setStatus("Uploading profile to Transkriptor...");
       setError(null);
       const base64 = await blobToBase64(finalBlob);
@@ -368,6 +429,8 @@ participant_name: ${name.trim()}
       console.error("submit error", err);
       setError(err?.message || "Failed to create profile");
       setStatus(null);
+    } finally {
+      setIsAutoSubmitting(false);
     }
   };
 
@@ -391,7 +454,7 @@ participant_name: ${name.trim()}
           <div className="flex gap-3 flex-wrap">
             <button
               onClick={startGuidedChat}
-              disabled={rtStatus !== "DISCONNECTED"}
+              disabled={!name.trim() || rtStatus !== "DISCONNECTED"}
               className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm disabled:opacity-60"
             >
               {rtStatus === "CONNECTING" ? "Connecting..." : "Start guided chat"}
@@ -408,10 +471,10 @@ participant_name: ${name.trim()}
             </button>
             <button
               onClick={() => submitProfile()}
-              disabled={!audioBlob || isRecording}
+              disabled={!audioBlob || isRecording || isAutoSubmitting}
               className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm disabled:opacity-50"
             >
-              Submit to Transkriptor
+              {isAutoSubmitting ? "Submitting..." : "Submit to Transkriptor"}
             </button>
           </div>
           <div className="bg-gray-50 border rounded-lg p-3 text-xs text-gray-700 space-y-1">
