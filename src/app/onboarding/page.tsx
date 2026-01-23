@@ -50,6 +50,7 @@ function OnboardingContent() {
   const recordingStartRef = useRef<number | null>(null);
   const firstLongQuestionRef = useRef<number | null>(null);
   const audioBlobRef = useRef<Blob | null>(null);
+  const micUnlockRef = useRef(false);
 
   const {
     connect,
@@ -57,6 +58,7 @@ function OnboardingContent() {
     sendEvent,
     status: rtStatus,
     interrupt,
+    setMicEnabled,
   } = useRealtimeSession({
     onConnectionChange: (s) => setChatStatus(s as SessionStatus),
   });
@@ -261,7 +263,13 @@ function OnboardingContent() {
       setError(null);
       setResult(null);
       setStatus("Requesting microphone...");
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: "audio/webm;codecs=opus",
         audioBitsPerSecond: 128000,
@@ -342,6 +350,12 @@ function OnboardingContent() {
         audioElement: audioRef.current || undefined,
       });
       setChatMessage("Connected. The AI will greet you.");
+      micUnlockRef.current = false;
+      if (audioRef.current) {
+        audioRef.current.muted = true;
+        audioRef.current.play().catch(() => undefined);
+      }
+      setMicEnabled(false);
 
       const id = uuidv4().slice(0, 32);
       const systemSeed = `
@@ -358,7 +372,13 @@ participant_name: ${name.trim()}
           content: [{ type: "input_text", text: systemSeed }],
         },
       });
-      sendEvent({ type: "response.create" });
+      setTimeout(() => {
+        if (audioRef.current) {
+          audioRef.current.muted = false;
+          audioRef.current.play().catch(() => undefined);
+        }
+        sendEvent({ type: "response.create" });
+      }, 600);
       if (!isRecording) {
         startRecording();
         setStatus("Recording (waiting for first question)...");
@@ -396,6 +416,18 @@ participant_name: ${name.trim()}
     }
   }, [transcriptItems]);
 
+  useEffect(() => {
+    if (micUnlockRef.current) return;
+    const firstCompletedAssistant = transcriptItems.find(
+      (t) => t.role === "assistant" && t.status === "DONE"
+    );
+    if (!firstCompletedAssistant) return;
+    micUnlockRef.current = true;
+    setTimeout(() => {
+      setMicEnabled(true);
+    }, 250);
+  }, [transcriptItems, setMicEnabled]);
+
   const finalizeAndSubmit = () => {
     if (isAutoSubmitting) return;
     setStatus("Finalizing recording and saving...");
@@ -421,26 +453,6 @@ participant_name: ${name.trim()}
     }
     stopGuidedChat();
   };
-
-  useEffect(() => {
-    const lastAssistant = [...transcriptItems]
-      .filter((t) => t.role === "assistant" && t.title)
-      .pop();
-    if (!lastAssistant || lastAssistant.itemId === lastAssistantProcessedRef.current) return;
-    lastAssistantProcessedRef.current = lastAssistant.itemId;
-
-    const text = lastAssistant.title || "";
-    const isLongQuestion =
-      text.length > 40 &&
-      (text.includes("?") ||
-        /describe|would you like|get out of the session|briefly/i.test(text));
-    const isNameCheck = /name|pronounc/i.test(text);
-    if (isLongQuestion && !isRecording && !isNameCheck) {
-      setStatus("Recording answer...");
-      startRecording();
-    }
-  }, [transcriptItems, isRecording]);
-
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {

@@ -2,6 +2,7 @@ import { RealtimeAgent } from "@openai/agents/realtime";
 
 export const onboardingProfileAgent = new RealtimeAgent({
   name: "onboarding-profile",
+  voice: "alloy",
   instructions: `
 You are a friendly onboarding host. The goal is to capture a clean user voice sample (30–60s), confirm how to pronounce their name, and gather 2–3 profile facts.
 
