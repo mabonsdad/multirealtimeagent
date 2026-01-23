@@ -40,6 +40,8 @@ function OnboardingContent() {
   const [chatMessage, setChatMessage] = useState<string | null>(null);
   const [autoSummary, setAutoSummary] = useState<string>("");
   const [isAutoSubmitting, setIsAutoSubmitting] = useState(false);
+  const [recordingStartMs, setRecordingStartMs] = useState<number | null>(null);
+  const [firstLongQuestionMs, setFirstLongQuestionMs] = useState<number | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -178,13 +180,20 @@ function OnboardingContent() {
     return new Blob([view], { type: "audio/wav" });
   };
 
-  const trimAndCompactSilence = async (blob: Blob): Promise<Blob> => {
+  const trimAndCompactSilence = async (
+    blob: Blob,
+    startOffsetMs?: number,
+  ): Promise<Blob> => {
     try {
       const arrayBuffer = await blob.arrayBuffer();
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-      const channel = audioBuffer.getChannelData(0);
+      const fullChannel = audioBuffer.getChannelData(0);
       const sampleRate = audioBuffer.sampleRate;
+      const offsetSamples = startOffsetMs
+        ? Math.min(fullChannel.length, Math.floor((startOffsetMs / 1000) * sampleRate))
+        : 0;
+      const channel = fullChannel.subarray(offsetSamples);
       const threshold = 0.01;
       const minSilenceSamples = Math.floor(sampleRate * 0.35);
       const minChunkSamples = Math.floor(sampleRate * 0.2);
@@ -257,6 +266,8 @@ function OnboardingContent() {
         audioBitsPerSecond: 128000,
       });
       chunksRef.current = [];
+      setRecordingStartMs(Date.now());
+      setFirstLongQuestionMs(null);
 
       mediaRecorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
@@ -266,7 +277,11 @@ function OnboardingContent() {
 
       mediaRecorder.onstop = async () => {
         const rawBlob = new Blob(chunksRef.current, { type: "audio/webm" });
-        const processed = await trimAndCompactSilence(rawBlob);
+        const offsetMs =
+          recordingStartMs && firstLongQuestionMs
+            ? Math.max(0, firstLongQuestionMs - recordingStartMs)
+            : 0;
+        const processed = await trimAndCompactSilence(rawBlob, offsetMs);
         setAudioBlob(processed);
         setStatus("Captured sample. Preparing to save...");
         stream.getTracks().forEach((t) => t.stop());
@@ -342,7 +357,12 @@ participant_name: ${name.trim()}
         },
       });
       sendEvent({ type: "response.create" });
-      setStatus("Waiting for the first question...");
+      if (!isRecording) {
+        startRecording();
+        setStatus("Recording (waiting for first question)...");
+      } else {
+        setStatus("Waiting for the first question...");
+      }
     } catch (err) {
       console.error("Guided chat start error", err);
       setChatMessage("Failed to start guided chat. Please retry.");
@@ -354,6 +374,25 @@ participant_name: ${name.trim()}
     disconnect();
     setChatMessage("Chat ended.");
   };
+
+  useEffect(() => {
+    const lastAssistant = [...transcriptItems]
+      .filter((t) => t.role === "assistant" && t.title)
+      .pop();
+    if (!lastAssistant || lastAssistant.itemId === lastAssistantProcessedRef.current) return;
+    lastAssistantProcessedRef.current = lastAssistant.itemId;
+
+    const text = lastAssistant.title || "";
+    const isLongQuestion =
+      text.length > 40 &&
+      (text.includes("?") ||
+        /describe|would you like|get out of the session|briefly/i.test(text));
+    const isNameCheck = /name|pronounc/i.test(text);
+    if (isLongQuestion && !isNameCheck && !firstLongQuestionMs) {
+      setFirstLongQuestionMs(Date.now());
+      setStatus("Recording answer...");
+    }
+  }, [transcriptItems, firstLongQuestionMs]);
 
   const finalizeAndSubmit = () => {
     if (isAutoSubmitting) return;
