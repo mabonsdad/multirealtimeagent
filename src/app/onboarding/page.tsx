@@ -51,6 +51,7 @@ function OnboardingContent() {
   const firstLongQuestionRef = useRef<number | null>(null);
   const audioBlobRef = useRef<Blob | null>(null);
   const micUnlockRef = useRef(false);
+  const responseStartedRef = useRef(false);
 
   const {
     connect,
@@ -351,6 +352,7 @@ function OnboardingContent() {
       });
       setChatMessage("Connected. The AI will greet you.");
       micUnlockRef.current = false;
+      responseStartedRef.current = false;
       if (audioRef.current) {
         audioRef.current.muted = true;
         audioRef.current.play().catch(() => undefined);
@@ -377,7 +379,11 @@ participant_name: ${name.trim()}
           audioRef.current.muted = false;
           audioRef.current.play().catch(() => undefined);
         }
-        sendEvent({ type: "response.create" });
+        sendEvent({ type: "input_audio_buffer.clear" });
+        if (!responseStartedRef.current) {
+          responseStartedRef.current = true;
+          sendEvent({ type: "response.create" });
+        }
       }, 600);
       if (!isRecording) {
         startRecording();
