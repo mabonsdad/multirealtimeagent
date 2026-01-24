@@ -60,18 +60,25 @@ async function streamToString(body: any): Promise<string> {
 async function getConfigByKey(key: string): Promise<SessionSetupConfig | null> {
   if (!S3_BUCKET) return null;
   const client = getS3Client();
-  const resp = await client.send(
-    new GetObjectCommand({
-      Bucket: S3_BUCKET,
-      Key: key,
-    }),
-  );
-  const bodyStr = await streamToString(resp.Body);
-  if (!bodyStr) return null;
   try {
-    return JSON.parse(bodyStr);
-  } catch {
-    return null;
+    const resp = await client.send(
+      new GetObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: key,
+      }),
+    );
+    const bodyStr = await streamToString(resp.Body);
+    if (!bodyStr) return null;
+    try {
+      return JSON.parse(bodyStr);
+    } catch {
+      return null;
+    }
+  } catch (err: any) {
+    if (err?.name === "NoSuchKey" || err?.$metadata?.httpStatusCode === 404) {
+      return null;
+    }
+    throw err;
   }
 }
 
@@ -134,13 +141,7 @@ export async function GET(request: Request) {
 
     if (active === "1" || active === "true") {
       const config = await getConfigByKey(ACTIVE_KEY);
-      if (!config) {
-        return NextResponse.json(
-          { error: "Active session setup not found" },
-          { status: 404 },
-        );
-      }
-      return NextResponse.json({ config });
+      return NextResponse.json({ config: config || null });
     }
 
     if (id) {
