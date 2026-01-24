@@ -46,6 +46,7 @@ function OnboardingContent() {
   const [chatMessage, setChatMessage] = useState<string | null>(null);
   const [autoSummary, setAutoSummary] = useState<string>("");
   const [isAutoSubmitting, setIsAutoSubmitting] = useState(false);
+  const [assistantSpeaking, setAssistantSpeaking] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -59,6 +60,8 @@ function OnboardingContent() {
   const micUnlockRef = useRef(false);
   const responseStartedRef = useRef(false);
   const turnDetectionArmedRef = useRef(false);
+  const micCooldownRef = useRef<number | null>(null);
+  const assistantSpeakingRef = useRef(false);
 
   const {
     connect,
@@ -83,6 +86,9 @@ function OnboardingContent() {
     return () => {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
         mediaRecorderRef.current.stop();
+      }
+      if (micCooldownRef.current) {
+        window.clearTimeout(micCooldownRef.current);
       }
       disconnect();
     };
@@ -463,6 +469,27 @@ participant_name: ${name.trim()}
     }, 250);
   }, [transcriptItems, setMicEnabled, sendEvent]);
 
+  useEffect(() => {
+    const isSpeaking = transcriptItems.some(
+      (t) => t.role === "assistant" && t.status === "IN_PROGRESS"
+    );
+    if (assistantSpeakingRef.current === isSpeaking) return;
+    assistantSpeakingRef.current = isSpeaking;
+    setAssistantSpeaking(isSpeaking);
+    if (!micUnlockRef.current) return;
+    if (micCooldownRef.current) {
+      window.clearTimeout(micCooldownRef.current);
+      micCooldownRef.current = null;
+    }
+    if (isSpeaking) {
+      setMicEnabled(false);
+    } else {
+      micCooldownRef.current = window.setTimeout(() => {
+        setMicEnabled(true);
+      }, 400);
+    }
+  }, [transcriptItems, setMicEnabled]);
+
   const finalizeAndSubmit = () => {
     if (isAutoSubmitting) return;
     setStatus("Finalizing recording and saving...");
@@ -581,6 +608,7 @@ participant_name: ${name.trim()}
             <div>Connection: {chatStatus}</div>
             {chatMessage && <div>{chatMessage}</div>}
             {isRecording && <div className="text-emerald-700">Recording mic sample…</div>}
+            {assistantSpeaking && <div className="text-gray-600">Assistant speaking…</div>}
           </div>
           {status && <div className="text-sm text-emerald-700">{status}</div>}
           {error && <div className="text-sm text-red-600">{error}</div>}
