@@ -17,6 +17,12 @@ type ProfileResult = {
 };
 
 const SUMMARY_MODEL = "gpt-4.1-mini";
+const ONBOARDING_TURN_DETECTION = {
+  type: "server_vad",
+  threshold: 0.95,
+  prefix_padding_ms: 300,
+  silence_duration_ms: 800,
+};
 
 const blobToBase64 = (blob: Blob): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -52,6 +58,7 @@ function OnboardingContent() {
   const audioBlobRef = useRef<Blob | null>(null);
   const micUnlockRef = useRef(false);
   const responseStartedRef = useRef(false);
+  const turnDetectionArmedRef = useRef(false);
 
   const {
     connect,
@@ -353,11 +360,21 @@ function OnboardingContent() {
       setChatMessage("Connected. The AI will greet you.");
       micUnlockRef.current = false;
       responseStartedRef.current = false;
+      turnDetectionArmedRef.current = false;
       if (audioRef.current) {
         audioRef.current.muted = true;
         audioRef.current.play().catch(() => undefined);
       }
       setMicEnabled(false);
+      sendEvent({
+        type: "session.update",
+        session: {
+          turn_detection: {
+            ...ONBOARDING_TURN_DETECTION,
+            create_response: false,
+          },
+        },
+      });
 
       const id = uuidv4().slice(0, 32);
       const systemSeed = `
@@ -431,8 +448,20 @@ participant_name: ${name.trim()}
     micUnlockRef.current = true;
     setTimeout(() => {
       setMicEnabled(true);
+      if (!turnDetectionArmedRef.current) {
+        turnDetectionArmedRef.current = true;
+        sendEvent({
+          type: "session.update",
+          session: {
+            turn_detection: {
+              ...ONBOARDING_TURN_DETECTION,
+              create_response: true,
+            },
+          },
+        });
+      }
     }, 250);
-  }, [transcriptItems, setMicEnabled]);
+  }, [transcriptItems, setMicEnabled, sendEvent]);
 
   const finalizeAndSubmit = () => {
     if (isAutoSubmitting) return;
