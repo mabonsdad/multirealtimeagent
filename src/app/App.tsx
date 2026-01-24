@@ -63,6 +63,7 @@ function App() {
   // via global codecPatch at module load 
 
   const {
+    transcriptItems,
     addTranscriptMessage,
     addTranscriptBreadcrumb,
   } = useTranscript();
@@ -76,6 +77,7 @@ function App() {
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   // Ref to identify whether the latest agent switch came from an automatic handoff
   const handoffTriggeredRef = useRef(false);
+  const greetingGateRef = useRef(false);
 
   const sdkAudioElement = React.useMemo(() => {
     if (typeof window === 'undefined') return undefined;
@@ -303,6 +305,8 @@ function App() {
     if (sdkScenarioMap[agentSetKey]) {
       if (sessionStatus !== "DISCONNECTED") return;
       setSessionStatus("CONNECTING");
+      greetingGateRef.current =
+        agentSetKey === "agentSupervisorFacilitatedConversation";
 
       try {
         const EPHEMERAL_KEY = await fetchEphemeralKey();
@@ -338,6 +342,14 @@ function App() {
             addTranscriptBreadcrumb,
           },
         });
+
+        if (greetingGateRef.current) {
+          setMicEnabled(false);
+          sendClientEvent(
+            { type: "input_audio_buffer.clear" },
+            "greeting gate clear"
+          );
+        }
 
         if (
           agentSetKey === "agentSupervisorFacilitatedConversation" &&
@@ -404,6 +416,7 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     // Reflect Push-to-Talk UI state by (de)activating server VAD on the
     // backend. The Realtime SDK supports live session updates via the
     // `session.update` event.
+    const allowAutoResponse = !isAIMuted && !greetingGateRef.current;
     const turnDetection = isPTTActive
       ? null
       : {
@@ -411,7 +424,7 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
           threshold: 0.9,
           prefix_padding_ms: 300,
           silence_duration_ms: 500,
-          create_response: !isAIMuted,
+          create_response: allowAutoResponse,
         };
 
     sendEvent({
@@ -427,6 +440,19 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     }
     return;
   }
+
+  useEffect(() => {
+    if (!greetingGateRef.current || sessionStatus !== "CONNECTED") return;
+    const firstCompletedAssistant = transcriptItems.find(
+      (t) => t.role === "assistant" && t.status === "DONE"
+    );
+    if (!firstCompletedAssistant) return;
+    greetingGateRef.current = false;
+    if (!isMicMuted) {
+      setMicEnabled(true);
+    }
+    updateSession(false);
+  }, [transcriptItems, sessionStatus, isMicMuted, setMicEnabled, updateSession]);
 
   const handleSendTextMessage = () => {
     if (!userText.trim()) return;
