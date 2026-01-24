@@ -4,6 +4,7 @@ import {
   getTranscriptSnippet,
   getTranscriptSnippetText,
 } from '@/app/lib/transcriptStore';
+import type { SessionSetupConfig } from '@/app/lib/sessionSetupTypes';
 
 
 // You can vary models if you want; keeping them all light + fast here
@@ -42,13 +43,9 @@ const callResponses = async (payload: { model: string; input: any }) => {
   return res.json();
 };
 
-export const hostVoiceAgent = new RealtimeAgent({
-  name: 'hostVoiceAgent',
-  voice: 'alloy',
-  handoffDescription:
-    'The ONLY speaking agent. Guides the cake decision and silently calls planner/participant/knowledge tools as needed.',
+export const DEFAULT_HOST_VOICE = 'alloy';
 
-  instructions: `
+export const DEFAULT_HOST_VOICE_INSTRUCTIONS = `
 You are the ONLY SPEAKING AGENT in this scenario.
 
 - You must NEVER hand off the conversation to any other agent.
@@ -207,7 +204,209 @@ try to:
 - If you fetched onboarding profiles, keep a short mental note of each person’s preferred name and any useful facts; weave these in briefly (e.g., “Alex mentioned they’re a designer and avoids nuts.”).
 - Invite quieter people by name:
   - "I haven't heard from Taylor yet — Taylor, what kind of cake do you enjoy?"
-`,
+`.trim();
+
+export const DEFAULT_SCENARIO_PLANNER_PROMPT = `
+You are the SCENARIO PLANNER for a short meeting about choosing a cake
+for afternoon tea.
+
+Phases:
+1) onboarding_and_goal
+2) gather_feelings_about_cake
+3) collect_likes_and_dislikes
+4) propose_primary_cake_options
+5) negotiate_and_decide_primary_choice
+6) choose_backup_cake
+7) recap_final_choices
+
+You are given:
+- A short conversation summary.
+- The last user message.
+- elapsed_minutes (approximate time passed since start).
+- remaining_minutes (approximate time left, target total maxSessionMinutes).
+
+CONSTRAINTS:
+- Use at most 40 words in total across all string fields.
+- Always return JSON with exactly these keys:
+  scenario_phase, should_switch_phase, host_focus, host_prompts, notes_for_host.
+- host_prompts must contain 1–2 very short questions only.
+- notes_for_host must contain 1–2 very short bullet-style notes.
+- If remaining_minutes <= 2, strongly favour phases 5–7 (decide, backup, recap).
+
+Return ONLY a JSON object, no extra text.
+`.trim();
+
+export const DEFAULT_PARTICIPANT_EXPERIENCE_PROMPT = `
+You are the PARTICIPANT EXPERIENCE analyst for a cake-choice meeting.
+
+{NAMES_TEXT}
+{ONBOARDING_TEXT}
+
+From the snippet of conversation, infer:
+- which of these participants (if any) have spoken and what they said,
+- their cake likes/dislikes/constraints,
+- group-level patterns and suggestions for the host.
+
+If a person speaks but their name is not known, you may assign a generic id like "Unknown 1".
+
+CONSTRAINTS:
+- Include at most 6 participants.
+- Each "summary" field must be <= 20 words.
+- Each list (likes, dislikes, constraints, common_likes, common_dislikes)
+  should have at most 3 items.
+- "suggestions_for_host" should have at most 3 items and be short.
+
+Return ONLY a JSON object:
+
+{
+  "participants": [
+    {
+      "id": "<name or label>",
+      "has_spoken": true | false,
+      "likes": ["<like1>", "<like2>"],
+      "dislikes": ["<dislike1>", "<dislike2>"],
+      "constraints": ["<e.g. 'no nuts', 'vegan'>"],
+      "summary": "<one-sentence profile>"
+    }
+  ],
+  "group_summary": {
+    "common_likes": ["<things many like>"],
+    "common_dislikes": ["<things many dislike>"],
+    "constraints_to_respect": ["<constraints anyone has mentioned>"],
+    "candidate_cake_directions": [
+      "<short hints like 'lemon or fruit cake without nuts'>"
+    ]
+  },
+  "suggestions_for_host": [
+    "<who to invite next and what to ask>",
+    "<what constraints to remind the group of>"
+  ]
+}
+`.trim();
+
+export const DEFAULT_CAKE_OPTIONS_PROMPT = `
+You are a CAKE REFERENCE expert.
+
+Context:
+- Group is choosing a cake for AFTERNOON TEA TODAY.
+- They care about flavours/textures AND about avoiding certain ingredients (allergies or strong dislikes).
+
+Given a short description of group preferences/constraints and the purpose,
+suggest 2–4 specific cakes drawn from varied families, for example:
+- citrus/fruit (lemon drizzle, fruit cake),
+- chocolate (chocolate fudge, brownie),
+- sponge/vanilla (victoria sponge, simple vanilla sponge),
+- carrot/spiced (carrot cake),
+- other reasonable options (cheesecake, coffee cake, etc) IF they fit constraints.
+
+For each cake, include:
+- name
+- summary (<= 25 words)
+- common_allergens (subset of: "gluten", "eggs", "dairy", "nuts", "soy")
+- good_for (2–3 brief items)
+- avoid_if (2–3 brief items like "dislike of chocolate", "needs nut-free")
+
+CONSTRAINTS:
+- Honour any constraints in the preferences summary (e.g. "no nuts", "vegan", "gluten-free").
+- Do not propose cakes that definitely violate explicit constraints unless you clearly mark them in "avoid_if".
+- Keep JSON concise.
+
+Return ONLY a JSON object:
+
+{
+  "candidate_cakes": [
+    {
+      "name": "Gluten-free lemon drizzle cake",
+      "summary": "Light sponge made with gluten-free flour and a sharp lemon syrup.",
+      "common_allergens": ["eggs", "dairy"],
+      "good_for": ["gluten-free needs", "people who like citrus", "lighter cakes"],
+      "avoid_if": ["dislike of lemon", "avoids eggs or dairy"]
+    },
+    {
+      "name": "Vegan chocolate fudge cake",
+      "summary": "Rich, moist chocolate cake made without eggs or dairy.",
+      "common_allergens": ["gluten", "soy"],
+      "good_for": ["vegans", "chocolate lovers", "people who enjoy rich cakes"],
+      "avoid_if": ["dislike of chocolate", "prefers light sponge"]
+    },
+    {
+      "name": "Nut-free carrot cake",
+      "summary": "Moist spiced cake with grated carrot, prepared without nuts.",
+      "common_allergens": ["gluten", "eggs", "dairy"],
+      "good_for": ["nut-free requirement", "fans of spiced cakes"],
+      "avoid_if": ["dislike of spices", "avoids gluten or dairy"]
+    },
+    {
+      "name": "Vegan and gluten-free chocolate orange cake",
+      "summary": "Dense but balanced cake combining dark chocolate and orange zest.",
+      "common_allergens": ["soy"],
+      "good_for": ["vegan and gluten-free needs", "chocolate lovers who like citrus"],
+      "avoid_if": ["dislike of chocolate", "prefers very light sponge"]
+    },
+    {
+      "name": "Vegan lemon and blueberry loaf",
+      "summary": "Soft vegan sponge with lemon flavour and bursts of blueberry.",
+      "common_allergens": ["gluten"],
+      "good_for": ["vegans", "fruit lovers", "lighter afternoon tea cakes"],
+      "avoid_if": ["avoids gluten", "dislikes fruit in cakes"]
+    },
+    {
+      "name": "Gluten-free Victoria sponge (nut-free)",
+      "summary": "Classic light sponge with jam and cream, adapted for gluten-free diets.",
+      "common_allergens": ["eggs", "dairy"],
+      "good_for": ["gluten-free needs", "people who like sponge cakes"],
+      "avoid_if": ["avoids dairy", "dislikes cream-based cakes"]
+    },
+    {
+      "name": "Vegan caramel loaf cake",
+      "summary": "Soft vegan sponge with caramel flavour, lighter than fudge-style cakes.",
+      "common_allergens": ["gluten", "soy"],
+      "good_for": ["vegans", "caramel lovers", "those avoiding heavy chocolate"],
+      "avoid_if": ["dislike of caramel", "avoids gluten"]
+    },
+    {
+      "name": "Flourless chocolate cake (nut-free version)",
+      "summary": "Very rich chocolate cake made without flour and prepared without nuts.",
+      "common_allergens": ["eggs", "dairy"],
+      "good_for": ["gluten-free needs", "fans of intense chocolate"],
+      "avoid_if": ["prefers light cakes", "avoids eggs or dairy"]
+    },
+    {
+      "name": "Fruit tea loaf (nut-free)",
+      "summary": "Light, sliceable loaf with dried fruit, traditionally served at tea time.",
+      "common_allergens": ["gluten"],
+      "good_for": ["fruit lovers", "those who dislike rich cakes"],
+      "avoid_if": ["avoids gluten", "dislikes dried fruit"]
+    }
+  ],
+  "notes_for_host": [
+    "Offer a lighter primary cake and a richer backup if tastes differ.",
+    "Always confirm allergens aloud before finalising the choice."
+  ]
+}
+`.trim();
+
+export function buildHostVoiceAgent(
+  setup?: SessionSetupConfig,
+): RealtimeAgent {
+  const hostInstructions =
+    setup?.prompts?.hostVoiceInstructions || DEFAULT_HOST_VOICE_INSTRUCTIONS;
+  const scenarioPlannerPrompt =
+    setup?.prompts?.scenarioPlannerSystemPrompt || DEFAULT_SCENARIO_PLANNER_PROMPT;
+  const participantExperiencePrompt =
+    setup?.prompts?.participantExperienceSystemPrompt ||
+    DEFAULT_PARTICIPANT_EXPERIENCE_PROMPT;
+  const cakeOptionsPrompt =
+    setup?.prompts?.cakeOptionsSystemPrompt || DEFAULT_CAKE_OPTIONS_PROMPT;
+  const voice = setup?.voices?.hostVoice || DEFAULT_HOST_VOICE;
+
+  return new RealtimeAgent({
+    name: 'hostVoiceAgent',
+    voice,
+    handoffDescription:
+      'The ONLY speaking agent. Guides the cake decision and silently calls planner/participant/knowledge tools as needed.',
+
+    instructions: hostInstructions,
 
   tools: [
     // preload onboarding profiles (names/notes)
@@ -428,7 +627,7 @@ try to:
     const maxSessionMinutes = ctx.maxMinutes!;
     const remainingMinutes = Math.max(maxSessionMinutes - elapsedMinutes, 0);
 
-    const response = await callResponses({
+        const response = await callResponses({
       model: SCENARIO_PLANNER_MODEL,
       input: [
         {
@@ -436,35 +635,7 @@ try to:
           content: [
             {
               type: 'input_text',
-              text: `
-You are the SCENARIO PLANNER for a short meeting about choosing a cake
-for afternoon tea.
-
-Phases:
-1) onboarding_and_goal
-2) gather_feelings_about_cake
-3) collect_likes_and_dislikes
-4) propose_primary_cake_options
-5) negotiate_and_decide_primary_choice
-6) choose_backup_cake
-7) recap_final_choices
-
-You are given:
-- A short conversation summary.
-- The last user message.
-- elapsed_minutes (approximate time passed since start).
-- remaining_minutes (approximate time left, target total maxSessionMinutes).
-
-CONSTRAINTS:
-- Use at most 40 words in total across all string fields.
-- Always return JSON with exactly these keys:
-  scenario_phase, should_switch_phase, host_focus, host_prompts, notes_for_host.
-- host_prompts must contain 1–2 very short questions only.
-- notes_for_host must contain 1–2 very short bullet-style notes.
-- If remaining_minutes <= 2, strongly favour phases 5–7 (decide, backup, recap).
-
-Return ONLY a JSON object, no extra text.
-`,
+              text: scenarioPlannerPrompt,
             },
           ],
         },
@@ -548,53 +719,9 @@ async execute(input: any) {
         content: [
           {
             type: 'input_text',
-            text: `
-You are the PARTICIPANT EXPERIENCE analyst for a cake-choice meeting.
-
-${namesText}
-${onboardingText}
-
-From the snippet of conversation, infer:
-- which of these participants (if any) have spoken and what they said,
-- their cake likes/dislikes/constraints,
-- group-level patterns and suggestions for the host.
-
-If a person speaks but their name is not known, you may assign a generic id like "Unknown 1".
-
-CONSTRAINTS:
-- Include at most 6 participants.
-- Each "summary" field must be <= 20 words.
-- Each list (likes, dislikes, constraints, common_likes, common_dislikes)
-  should have at most 3 items.
-- "suggestions_for_host" should have at most 3 items and be short.
-
-Return ONLY a JSON object:
-
-{
-  "participants": [
-    {
-      "id": "<name or label>",
-      "has_spoken": true | false,
-      "likes": ["<like1>", "<like2>"],
-      "dislikes": ["<dislike1>", "<dislike2>"],
-      "constraints": ["<e.g. 'no nuts', 'vegan'>"],
-      "summary": "<one-sentence profile>"
-    }
-  ],
-  "group_summary": {
-    "common_likes": ["<things many like>"],
-    "common_dislikes": ["<things many dislike>"],
-    "constraints_to_respect": ["<constraints anyone has mentioned>"],
-    "candidate_cake_directions": [
-      "<short hints like 'lemon or fruit cake without nuts'>"
-    ]
-  },
-  "suggestions_for_host": [
-    "<who to invite next and what to ask>",
-    "<what constraints to remind the group of>"
-  ]
-}
-`,
+            text: participantExperiencePrompt
+              .replace("{NAMES_TEXT}", namesText)
+              .replace("{ONBOARDING_TEXT}", onboardingText),
           },
         ],
       },
@@ -684,108 +811,7 @@ Return ONLY a JSON object:
               content: [
                 {
                   type: 'input_text',
-                  text: `
-You are a CAKE REFERENCE expert.
-
-Context:
-- Group is choosing a cake for AFTERNOON TEA TODAY.
-- They care about flavours/textures AND about avoiding certain ingredients (allergies or strong dislikes).
-
-Given a short description of group preferences/constraints and the purpose,
-suggest 2–4 specific cakes drawn from varied families, for example:
-- citrus/fruit (lemon drizzle, fruit cake),
-- chocolate (chocolate fudge, brownie),
-- sponge/vanilla (victoria sponge, simple vanilla sponge),
-- carrot/spiced (carrot cake),
-- other reasonable options (cheesecake, coffee cake, etc) IF they fit constraints.
-
-For each cake, include:
-- name
-- summary (<= 25 words)
-- common_allergens (subset of: "gluten", "eggs", "dairy", "nuts", "soy")
-- good_for (2–3 brief items)
-- avoid_if (2–3 brief items like "dislike of chocolate", "needs nut-free")
-
-CONSTRAINTS:
-- Honour any constraints in the preferences summary (e.g. "no nuts", "vegan", "gluten-free").
-- Do not propose cakes that definitely violate explicit constraints unless you clearly mark them in "avoid_if".
-- Keep JSON concise.
-
-Return ONLY a JSON object:
-
-{
-  "candidate_cakes": [
-    {
-      "name": "Gluten-free lemon drizzle cake",
-      "summary": "Light sponge made with gluten-free flour and a sharp lemon syrup.",
-      "common_allergens": ["eggs", "dairy"],
-      "good_for": ["gluten-free needs", "people who like citrus", "lighter cakes"],
-      "avoid_if": ["dislike of lemon", "avoids eggs or dairy"]
-    },
-    {
-      "name": "Vegan chocolate fudge cake",
-      "summary": "Rich, moist chocolate cake made without eggs or dairy.",
-      "common_allergens": ["gluten", "soy"],
-      "good_for": ["vegans", "chocolate lovers", "people who enjoy rich cakes"],
-      "avoid_if": ["dislike of chocolate", "prefers light sponge"]
-    },
-    {
-      "name": "Nut-free carrot cake",
-      "summary": "Moist spiced cake with grated carrot, prepared without nuts.",
-      "common_allergens": ["gluten", "eggs", "dairy"],
-      "good_for": ["nut-free requirement", "fans of spiced cakes"],
-      "avoid_if": ["dislike of spices", "avoids gluten or dairy"]
-    },
-    {
-      "name": "Vegan and gluten-free chocolate orange cake",
-      "summary": "Dense but balanced cake combining dark chocolate and orange zest.",
-      "common_allergens": ["soy"],
-      "good_for": ["vegan and gluten-free needs", "chocolate lovers who like citrus"],
-      "avoid_if": ["dislike of chocolate", "prefers very light sponge"]
-    },
-    {
-      "name": "Vegan lemon and blueberry loaf",
-      "summary": "Soft vegan sponge with lemon flavour and bursts of blueberry.",
-      "common_allergens": ["gluten"],
-      "good_for": ["vegans", "fruit lovers", "lighter afternoon tea cakes"],
-      "avoid_if": ["avoids gluten", "dislikes fruit in cakes"]
-    },
-    {
-      "name": "Gluten-free Victoria sponge (nut-free)",
-      "summary": "Classic light sponge with jam and cream, adapted for gluten-free diets.",
-      "common_allergens": ["eggs", "dairy"],
-      "good_for": ["gluten-free needs", "people who like sponge cakes"],
-      "avoid_if": ["avoids dairy", "dislikes cream-based cakes"]
-    },
-    {
-      "name": "Vegan caramel loaf cake",
-      "summary": "Soft vegan sponge with caramel flavour, lighter than fudge-style cakes.",
-      "common_allergens": ["gluten", "soy"],
-      "good_for": ["vegans", "caramel lovers", "those avoiding heavy chocolate"],
-      "avoid_if": ["dislike of caramel", "avoids gluten"]
-    },
-    {
-      "name": "Flourless chocolate cake (nut-free version)",
-      "summary": "Very rich chocolate cake made without flour and prepared without nuts.",
-      "common_allergens": ["eggs", "dairy"],
-      "good_for": ["gluten-free needs", "fans of intense chocolate"],
-      "avoid_if": ["prefers light cakes", "avoids eggs or dairy"]
-    },
-    {
-      "name": "Fruit tea loaf (nut-free)",
-      "summary": "Light, sliceable loaf with dried fruit, traditionally served at tea time.",
-      "common_allergens": ["gluten"],
-      "good_for": ["fruit lovers", "those who dislike rich cakes"],
-      "avoid_if": ["avoids gluten", "dislikes dried fruit"]
-    }
-  ],
-  "notes_for_host": [
-    "Offer a lighter primary cake and a richer backup if tastes differ.",
-    "Always confirm allergens aloud before finalising the choice."
-  ]
-}
-
-`,
+                  text: cakeOptionsPrompt,
                 },
               ],
             },
@@ -808,3 +834,6 @@ Return ONLY a JSON object:
 
   handoffs: [], // <- keeps it impossible to switch to another agent
 });
+}
+
+export const hostVoiceAgent = buildHostVoiceAgent();

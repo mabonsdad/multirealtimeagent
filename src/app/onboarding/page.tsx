@@ -2,12 +2,14 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { onboardingProfileAgent } from "@/app/agentConfigs/onboardingProfile";
+import { buildOnboardingProfileAgent } from "@/app/agentConfigs/onboardingProfile";
 import { useRealtimeSession } from "../hooks/useRealtimeSession";
 import type { SessionStatus } from "../types";
 import { EventProvider } from "../contexts/EventContext";
 import { TranscriptProvider } from "../contexts/TranscriptContext";
 import { useTranscript } from "../contexts/TranscriptContext";
+import type { SessionSetupConfig } from "@/app/lib/sessionSetupTypes";
+import { DEFAULT_SESSION_SETUP_CONFIG } from "@/app/lib/sessionSetupDefaults";
 
 type ProfileResult = {
   profileId?: string;
@@ -48,6 +50,8 @@ function OnboardingContent() {
   const [isAutoSubmitting, setIsAutoSubmitting] = useState(false);
   const [assistantSpeaking, setAssistantSpeaking] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [sessionSetupConfig, setSessionSetupConfig] =
+    useState<SessionSetupConfig>(DEFAULT_SESSION_SETUP_CONFIG);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -92,6 +96,21 @@ function OnboardingContent() {
       }
       disconnect();
     };
+  }, []);
+
+  useEffect(() => {
+    const loadActiveSetup = async () => {
+      try {
+        const resp = await fetch("/api/session-setup?active=1");
+        const data = await resp.json();
+        if (resp.ok && data?.config) {
+          setSessionSetupConfig(data.config);
+        }
+      } catch (err) {
+        console.warn("No active session setup found", err);
+      }
+    };
+    loadActiveSetup();
   }, []);
 
   const buildTranscriptText = () => {
@@ -358,9 +377,10 @@ function OnboardingContent() {
     }
     try {
       setChatMessage("Connecting to the AI host...");
+      const onboardingAgent = buildOnboardingProfileAgent(sessionSetupConfig);
       await connect({
         getEphemeralKey: fetchEphemeralKey,
-        initialAgents: [onboardingProfileAgent],
+        initialAgents: [onboardingAgent],
         audioElement: audioRef.current || undefined,
       });
       setChatMessage("Connected. The AI will greet you.");

@@ -11,6 +11,7 @@ import Events from "./components/Events";
 import BottomToolbar from "./components/BottomToolbar";
 import FullTranscript from "./components/FullTranscript";
 import ProfileManagerModal from "./components/ProfileManagerModal";
+import SessionSetupModal from "./components/SessionSetupModal";
 
 // Types
 import { SessionStatus } from "@/app/types";
@@ -24,6 +25,8 @@ import { createModerationGuardrail } from "@/app/agentConfigs/guardrails";
 import { useRollingTranscription, FULL_TRANSCRIPT_CHUNK_MS, FULL_TRANSCRIPT_HOP_MS } from "./hooks/useRollingTranscription";
 import useAudioDownload from "./hooks/useAudioDownload";
 import { useHandleSessionHistory } from "./hooks/useHandleSessionHistory";
+import type { SessionSetupConfig } from "@/app/lib/sessionSetupTypes";
+import { DEFAULT_SESSION_SETUP_CONFIG } from "@/app/lib/sessionSetupDefaults";
 
 // Agent configs
 import { allAgentSets, defaultAgentSetKey } from "@/app/agentConfigs";
@@ -33,7 +36,10 @@ import { customerServiceRetailCompanyName } from "@/app/agentConfigs/customerSer
 import { chatSupervisorCompanyName } from "@/app/agentConfigs/chatSupervisor";
 import { simpleHandoffScenario } from "@/app/agentConfigs/simpleHandoff";
 import { groupFacilitatedConversationScenario } from "@/app/agentConfigs/groupFacilitatedConversation";
-import { agentSupervisorFacilitatedConversationScenario } from "@/app/agentConfigs/agentSupervisorFacilitatedConversation";
+import {
+  agentSupervisorFacilitatedConversationScenario,
+  buildAgentSupervisorScenario,
+} from "@/app/agentConfigs/agentSupervisorFacilitatedConversation";
 
 // Map used by connect logic for scenarios defined via the SDK.
 const sdkScenarioMap: Record<string, RealtimeAgent[]> = {
@@ -73,6 +79,10 @@ function App() {
   const [selectedAgentConfigSet, setSelectedAgentConfigSet] = useState<
     RealtimeAgent[] | null
   >(null);
+  const [sessionSetupConfig, setSessionSetupConfig] =
+    useState<SessionSetupConfig>(DEFAULT_SESSION_SETUP_CONFIG);
+  const [isSessionSetupModalOpen, setIsSessionSetupModalOpen] =
+    useState<boolean>(false);
 
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   // Ref to identify whether the latest agent switch came from an automatic handoff
@@ -219,6 +229,21 @@ function App() {
   }, [searchParams]);
 
   useEffect(() => {
+    const loadActiveSetup = async () => {
+      try {
+        const resp = await fetch("/api/session-setup?active=1");
+        const data = await resp.json();
+        if (resp.ok && data?.config) {
+          setSessionSetupConfig(data.config);
+        }
+      } catch (err) {
+        console.warn("No active session setup found", err);
+      }
+    };
+    loadActiveSetup();
+  }, []);
+
+  useEffect(() => {
     if (selectedAgentName && sessionStatus === "DISCONNECTED") {
       connectToRealtime();
     }
@@ -302,7 +327,11 @@ function App() {
 
   const connectToRealtime = async () => {
     const agentSetKey = searchParams.get("agentConfig") || "default";
-    if (sdkScenarioMap[agentSetKey]) {
+    const scenarioAgents =
+      agentSetKey === "agentSupervisorFacilitatedConversation"
+        ? buildAgentSupervisorScenario(sessionSetupConfig || DEFAULT_SESSION_SETUP_CONFIG)
+        : sdkScenarioMap[agentSetKey];
+    if (scenarioAgents) {
       if (sessionStatus !== "DISCONNECTED") return;
       setSessionStatus("CONNECTING");
       greetingGateRef.current =
@@ -317,7 +346,7 @@ function App() {
         setHasSentMeetingConfig(false);
 
         // Ensure the selectedAgentName is first so that it becomes the root
-        const reorderedAgents = [...sdkScenarioMap[agentSetKey]];
+        const reorderedAgents = [...scenarioAgents];
         const idx = reorderedAgents.findIndex((a) => a.name === selectedAgentName);
         if (idx > 0) {
           const [agent] = reorderedAgents.splice(idx, 1);
@@ -752,6 +781,19 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
             Manage Profiles
           </button>
 
+          <button
+            onClick={() => setIsSessionSetupModalOpen(true)}
+            className="text-xs px-3 py-1.5 rounded-md border border-gray-300 bg-white hover:bg-gray-50 whitespace-nowrap"
+          >
+            Session Setup
+          </button>
+
+          {sessionSetupConfig?.name && (
+            <div className="text-xs text-gray-600 whitespace-nowrap">
+              Setup: {sessionSetupConfig.name}
+            </div>
+          )}
+
           {sessionStartMs && (
             <div className="text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-1 text-right whitespace-nowrap">
               Time: {Math.floor(elapsedSeconds / 60)}:
@@ -831,6 +873,14 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
       <ProfileManagerModal
         open={isProfileModalOpen}
         onClose={() => setIsProfileModalOpen(false)}
+      />
+      <SessionSetupModal
+        open={isSessionSetupModalOpen}
+        onClose={() => setIsSessionSetupModalOpen(false)}
+        onApply={(config) => setSessionSetupConfig(config)}
+        isSessionActive={
+          sessionStatus === "CONNECTED" || sessionStatus === "CONNECTING"
+        }
       />
     </div>
   );

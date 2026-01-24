@@ -1,9 +1,9 @@
 import { RealtimeAgent } from "@openai/agents/realtime";
+import type { SessionSetupConfig } from "@/app/lib/sessionSetupTypes";
 
-export const onboardingProfileAgent = new RealtimeAgent({
-  name: "onboarding-profile",
-  voice: "alloy",
-  instructions: `
+export const DEFAULT_ONBOARDING_VOICE = "alloy";
+
+export const DEFAULT_ONBOARDING_INSTRUCTIONS = `
 You are a friendly onboarding host. The goal is to capture a clean user voice sample (30–60s), confirm how to pronounce their name, and gather 2–3 profile facts.
 
 Flow (keep concise, pause after each question):
@@ -13,9 +13,23 @@ Flow (keep concise, pause after each question):
 - Close: Thank them, say you’re looking forward to the session, and say goodbye (include the exact word "Goodbye" in the final sentence). Then ask them to click “Stop & End Chat” so their profile is saved.
 
 Tone: warm, brief, leave room for the user to speak. Do not include your own audio in any recording instructions; only the user voice is recorded.
-`,
-  tools: [],
-});
+`.trim();
+
+export function buildOnboardingProfileAgent(
+  setup?: SessionSetupConfig,
+): RealtimeAgent {
+  const instructions =
+    setup?.prompts?.onboardingInstructions || DEFAULT_ONBOARDING_INSTRUCTIONS;
+  const voice = setup?.voices?.onboarding || DEFAULT_ONBOARDING_VOICE;
+  return new RealtimeAgent({
+    name: "onboarding-profile",
+    voice,
+    instructions,
+    tools: [],
+  });
+}
+
+export const onboardingProfileAgent = buildOnboardingProfileAgent();
 
 const onboardingAgents = [onboardingProfileAgent];
 export default onboardingAgents;
