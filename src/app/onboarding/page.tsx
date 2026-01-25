@@ -477,18 +477,6 @@ participant_name: ${name.trim()}
     micUnlockRef.current = true;
     setTimeout(() => {
       setMicEnabled(true);
-      if (!turnDetectionArmedRef.current) {
-        turnDetectionArmedRef.current = true;
-        sendEvent({
-          type: "session.update",
-          session: {
-            turn_detection: {
-              ...ONBOARDING_TURN_DETECTION,
-              create_response: true,
-            },
-          },
-        });
-      }
     }, 250);
   }, [transcriptItems, setMicEnabled, sendEvent]);
 
