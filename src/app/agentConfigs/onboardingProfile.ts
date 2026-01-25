@@ -13,6 +13,7 @@ Flow (keep concise, pause after each question):
 - Close: Thank them, say you’re looking forward to the session, and say goodbye (include the exact word "Goodbye" in the final sentence). Then ask them to click “Stop & End Chat” so their profile is saved.
 
 Tone: warm, brief, leave room for the user to speak. Do not include your own audio in any recording instructions; only the user voice is recorded.
+Silence policy: After your greeting, wait silently for the user to speak. Do not fill silence with repeated prompts, and ignore brief fillers like “uh”, “um”, or background noise.
 `.trim();
 
 export function buildOnboardingProfileAgent(

@@ -23,8 +23,11 @@ const ONBOARDING_TURN_DETECTION = {
   type: "server_vad",
   threshold: 0.95,
   prefix_padding_ms: 300,
-  silence_duration_ms: 800,
+  silence_duration_ms: 900,
 };
+const MIN_USER_WORDS = 3;
+const MIN_USER_CHARS = 8;
+const FILLER_REGEX = /^(?:\s|[.\-–—]|uh+|um+|erm+|mm+|mmm+|hmm+|ah+|oh+|okay+|ok)+$/i;
 
 const blobToBase64 = (blob: Blob): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -63,9 +66,10 @@ function OnboardingContent() {
   const audioBlobRef = useRef<Blob | null>(null);
   const micUnlockRef = useRef(false);
   const responseStartedRef = useRef(false);
-  const turnDetectionArmedRef = useRef(false);
   const micCooldownRef = useRef<number | null>(null);
   const assistantSpeakingRef = useRef(false);
+  const lastUserProcessedRef = useRef<string | null>(null);
+  const pendingUserResponseRef = useRef(false);
 
   const {
     connect,
@@ -386,7 +390,6 @@ function OnboardingContent() {
       setChatMessage("Connected. The AI will greet you.");
       micUnlockRef.current = false;
       responseStartedRef.current = false;
-      turnDetectionArmedRef.current = false;
       if (audioRef.current) {
         audioRef.current.muted = true;
         audioRef.current.play().catch(() => undefined);
@@ -503,12 +506,37 @@ participant_name: ${name.trim()}
     }
     if (isSpeaking) {
       setMicEnabled(false);
+      pendingUserResponseRef.current = false;
     } else {
       micCooldownRef.current = window.setTimeout(() => {
         setMicEnabled(true);
+        if (pendingUserResponseRef.current) {
+          pendingUserResponseRef.current = false;
+          sendEvent({ type: "response.create" });
+        }
       }, 400);
     }
-  }, [transcriptItems, setMicEnabled]);
+  }, [transcriptItems, setMicEnabled, sendEvent]);
+
+  useEffect(() => {
+    if (chatStatus !== "CONNECTED" || !micUnlockRef.current) return;
+    const latestUser = [...transcriptItems]
+      .filter((t) => t.role === "user" && t.status === "DONE")
+      .pop();
+    if (!latestUser || latestUser.itemId === lastUserProcessedRef.current) return;
+    lastUserProcessedRef.current = latestUser.itemId;
+
+    const text = (latestUser.title || "").trim();
+    const wordCount = text ? text.split(/\s+/).length : 0;
+    if (!text || text.length < MIN_USER_CHARS || wordCount < MIN_USER_WORDS) return;
+    if (FILLER_REGEX.test(text)) return;
+
+    if (assistantSpeakingRef.current) {
+      pendingUserResponseRef.current = true;
+      return;
+    }
+    sendEvent({ type: "response.create" });
+  }, [transcriptItems, chatStatus, sendEvent]);
 
   const finalizeAndSubmit = () => {
     if (isAutoSubmitting) return;
