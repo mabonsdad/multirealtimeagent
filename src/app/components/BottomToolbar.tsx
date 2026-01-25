@@ -9,6 +9,9 @@ interface BottomToolbarProps {
   isPTTUserSpeaking: boolean;
   handleTalkButtonDown: () => void;
   handleTalkButtonUp: () => void;
+  isAITalkHeld: boolean;
+  handleAITalkButtonDown: () => void;
+  handleAITalkButtonUp: () => void;
   isEventsPaneExpanded: boolean;
   setIsEventsPaneExpanded: (val: boolean) => void;
   isAudioPlaybackEnabled: boolean;
@@ -29,6 +32,9 @@ function BottomToolbar({
   isPTTUserSpeaking,
   handleTalkButtonDown,
   handleTalkButtonUp,
+  isAITalkHeld,
+  handleAITalkButtonDown,
+  handleAITalkButtonUp,
   isEventsPaneExpanded,
   setIsEventsPaneExpanded,
   isAudioPlaybackEnabled,
@@ -164,6 +170,30 @@ function BottomToolbar({
             }
           >
             Push to Talk
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-2 p-3 rounded-lg border min-w-[240px] bg-white border-gray-200">
+          <div className="text-sm font-semibold text-gray-800">
+            AI speak control
+          </div>
+          <div className="text-xs text-gray-600">
+            {isAITalkHeld ? "Speaking enabled" : "Listen-only (silent)"}
+          </div>
+          <button
+            onMouseDown={handleAITalkButtonDown}
+            onMouseUp={handleAITalkButtonUp}
+            onMouseLeave={handleAITalkButtonUp}
+            onTouchStart={handleAITalkButtonDown}
+            onTouchEnd={handleAITalkButtonUp}
+            className={
+              "py-2 px-4 rounded-md text-base transition-colors " +
+              (isAITalkHeld
+                ? "bg-emerald-600 text-white"
+                : "bg-gray-900 text-white hover:bg-black")
+            }
+          >
+            Hold to let AI speak
           </button>
         </div>
         </div>

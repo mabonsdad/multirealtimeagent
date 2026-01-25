@@ -5,6 +5,7 @@ import {
   getTranscriptSnippetText,
 } from '@/app/lib/transcriptStore';
 import type { SessionSetupConfig } from '@/app/lib/sessionSetupTypes';
+import { getBackgroundBrief } from '@/app/lib/participantBriefStore';
 
 
 // You can vary models if you want; keeping them all light + fast here
@@ -508,8 +509,14 @@ export function buildHostVoiceAgent(
       },
       async execute() {
         const ctx = meetingContextById['cake_meeting'] || {};
+        const background = getBackgroundBrief('cake_meeting');
+        const combined = [ctx.lastParticipantBrief, background?.text]
+          .filter(Boolean)
+          .join(' | ');
         return {
-          brief: ctx.lastParticipantBrief || '',
+          brief: combined || '',
+          background_brief: background?.text || '',
+          background_updated_at: background?.updatedAt || '',
           history_count: ctx.participantInsightsHistory?.length || 0,
         };
       },

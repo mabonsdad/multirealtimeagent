@@ -27,6 +27,8 @@ import useAudioDownload from "./hooks/useAudioDownload";
 import { useHandleSessionHistory } from "./hooks/useHandleSessionHistory";
 import type { SessionSetupConfig } from "@/app/lib/sessionSetupTypes";
 import { DEFAULT_SESSION_SETUP_CONFIG } from "@/app/lib/sessionSetupDefaults";
+import { getTranscriptSnippetText } from "@/app/lib/transcriptStore";
+import { setBackgroundBrief } from "@/app/lib/participantBriefStore";
 
 // Agent configs
 import { allAgentSets, defaultAgentSetKey } from "@/app/agentConfigs";
@@ -83,11 +85,18 @@ function App() {
     useState<SessionSetupConfig>(DEFAULT_SESSION_SETUP_CONFIG);
   const [isSessionSetupModalOpen, setIsSessionSetupModalOpen] =
     useState<boolean>(false);
+  const [isAITalkHeld, setIsAITalkHeld] = useState(false);
+  const [backgroundBrief, setBackgroundBriefState] = useState<string>("");
+  const [backgroundBriefAt, setBackgroundBriefAt] = useState<string>("");
 
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   // Ref to identify whether the latest agent switch came from an automatic handoff
   const handoffTriggeredRef = useRef(false);
   const greetingGateRef = useRef(false);
+  const aiFirstUtteranceLockRef = useRef(false);
+  const aiTalkStartMsRef = useRef<number | null>(null);
+  const backgroundInsightsBusyRef = useRef(false);
+  const lastBackgroundSnippetRef = useRef<string>("");
 
   const sdkAudioElement = React.useMemo(() => {
     if (typeof window === 'undefined') return undefined;
@@ -211,6 +220,10 @@ function App() {
 
   useHandleSessionHistory();
 
+  const BACKGROUND_INSIGHTS_INTERVAL_MS = 15000;
+  const BACKGROUND_SNIPPET_MAX = 50;
+  const BACKGROUND_MIN_CHARS = 120;
+
   useEffect(() => {
     let finalAgentConfig = searchParams.get("agentConfig");
     if (!finalAgentConfig || !allAgentSets[finalAgentConfig]) {
@@ -270,6 +283,12 @@ function App() {
       updateSession();
     }
   }, [isPTTActive]);
+
+  useEffect(() => {
+    if (sessionStatus === "CONNECTED") {
+      updateSession();
+    }
+  }, [isAITalkHeld]);
 
   useEffect(() => {
     if (sessionStatus === "CONNECTED") {
@@ -438,14 +457,17 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
         content: [{ type: 'input_text', text }],
       },
     });
-    sendClientEvent({ type: 'response.create' }, '(simulated user text message)');
+    if (!isAIMuted && isAITalkHeld) {
+      sendClientEvent({ type: 'response.create' }, '(simulated user text message)');
+    }
   };
 
   const updateSession = (shouldTriggerResponse: boolean = false) => {
     // Reflect Push-to-Talk UI state by (de)activating server VAD on the
     // backend. The Realtime SDK supports live session updates via the
     // `session.update` event.
-    const allowAutoResponse = !isAIMuted && !greetingGateRef.current;
+    const allowAutoResponse =
+      !isAIMuted && !greetingGateRef.current && isAITalkHeld;
     const turnDetection = isPTTActive
       ? null
       : {
@@ -464,7 +486,13 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     });
 
     // Send an initial 'hi' message to trigger the agent to greet the user
-    if (shouldTriggerResponse && !isAIMuted && !isMicMuted && !isPTTActive) {
+    if (
+      shouldTriggerResponse &&
+      !isAIMuted &&
+      !isMicMuted &&
+      !isPTTActive &&
+      isAITalkHeld
+    ) {
       sendSimulatedUserMessage('hi');
     }
     return;
@@ -483,6 +511,22 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     updateSession(false);
   }, [transcriptItems, sessionStatus, isMicMuted, setMicEnabled, updateSession]);
 
+  useEffect(() => {
+    if (!aiFirstUtteranceLockRef.current || !aiTalkStartMsRef.current) return;
+    const firstAssistantDone = transcriptItems.find(
+      (t) =>
+        t.role === "assistant" &&
+        t.status === "DONE" &&
+        (t.createdAtMs || 0) >= (aiTalkStartMsRef.current || 0)
+    );
+    if (!firstAssistantDone) return;
+    aiFirstUtteranceLockRef.current = false;
+    aiTalkStartMsRef.current = null;
+    if (!isMicMuted) {
+      setMicEnabled(true);
+    }
+  }, [transcriptItems, isMicMuted, setMicEnabled]);
+
   const handleSendTextMessage = () => {
     if (!userText.trim()) return;
     interrupt();
@@ -495,6 +539,133 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
 
     setUserText("");
   };
+
+  const runBackgroundInsights = useCallback(async () => {
+    if (backgroundInsightsBusyRef.current) return;
+    if (sessionStatus !== "CONNECTED") return;
+    const agentSetKey = searchParams.get("agentConfig") || "default";
+    if (agentSetKey !== "agentSupervisorFacilitatedConversation") return;
+    if (isAITalkHeld) return;
+    if (!sessionId) return;
+
+    const snippet = getTranscriptSnippetText(sessionId, BACKGROUND_SNIPPET_MAX);
+    if (!snippet || snippet.length < BACKGROUND_MIN_CHARS) return;
+    if (snippet === lastBackgroundSnippetRef.current) return;
+
+    backgroundInsightsBusyRef.current = true;
+    lastBackgroundSnippetRef.current = snippet;
+
+    try {
+      const namesText =
+        participantNames.length > 0
+          ? `Known participants: ${participantNames.join(", ")}.`
+          : "Known participants: (not provided).";
+      const onboardingText = "Onboarding facts: (not loaded).";
+      const systemPrompt = sessionSetupConfig.prompts.participantExperienceSystemPrompt
+        .replace("{NAMES_TEXT}", namesText)
+        .replace("{ONBOARDING_TEXT}", onboardingText);
+
+      const resp = await fetch("/api/responses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-4.1-mini",
+          input: [
+            {
+              role: "system",
+              content: [{ type: "input_text", text: systemPrompt }],
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: `Conversation snippet:\n${snippet}`,
+                },
+              ],
+            },
+          ],
+        }),
+      });
+
+      if (!resp.ok) {
+        const txt = await resp.text();
+        throw new Error(txt || "Background insights failed");
+      }
+      const data = await resp.json();
+      const contentText =
+        data?.output
+          ?.find((i: any) => i.type === "message" && i.role === "assistant")
+          ?.content?.find((c: any) => c.type === "output_text")?.text ?? "";
+      let parsed: any = null;
+      try {
+        parsed = contentText ? JSON.parse(contentText) : null;
+      } catch {
+        parsed = null;
+      }
+
+      const buildBrief = (output: any) => {
+        if (!output || typeof output !== "object") {
+          return contentText.trim();
+        }
+        const participants = output.participants || [];
+        const summaries = participants
+          .slice(0, 4)
+          .map((p: any) => `${p.id || p.name || "Someone"}: ${p.summary || ""}`.trim())
+          .filter(Boolean);
+        const suggestions = (output.suggestions_for_host || []).slice(0, 2);
+        const group = output.group_summary || {};
+        const commonLikes = group.common_likes?.slice(0, 2) || [];
+        return [
+          summaries.length ? `People: ${summaries.join("; ")}` : "",
+          commonLikes.length ? `Common likes: ${commonLikes.join(", ")}` : "",
+          suggestions.length ? `Next: ${suggestions.join(" | ")}` : "",
+        ]
+          .filter(Boolean)
+          .join(" — ");
+      };
+
+      const brief = buildBrief(parsed) || contentText.trim();
+      if (brief) {
+        const updatedAt = new Date().toISOString();
+        setBackgroundBriefState(brief);
+        setBackgroundBriefAt(updatedAt);
+        setBackgroundBrief(sessionId, {
+          text: brief,
+          updatedAt,
+          source: "transkriptor",
+          raw: parsed || contentText,
+        });
+        setBackgroundBrief("cake_meeting", {
+          text: brief,
+          updatedAt,
+          source: "transkriptor",
+          raw: parsed || contentText,
+        });
+      }
+    } catch (err) {
+      console.error("background insights error", err);
+    } finally {
+      backgroundInsightsBusyRef.current = false;
+    }
+  }, [
+    sessionStatus,
+    searchParams,
+    sessionId,
+    participantNames,
+    sessionSetupConfig,
+    isAITalkHeld,
+  ]);
+
+  useEffect(() => {
+    if (sessionStatus !== "CONNECTED") return;
+    const agentSetKey = searchParams.get("agentConfig") || "default";
+    if (agentSetKey !== "agentSupervisorFacilitatedConversation") return;
+    const interval = setInterval(() => {
+      runBackgroundInsights();
+    }, BACKGROUND_INSIGHTS_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [sessionStatus, searchParams, runBackgroundInsights]);
 
   const handleTalkButtonDown = () => {
     if (sessionStatus !== 'CONNECTED') return;
@@ -515,10 +686,29 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     setIsPTTUserSpeaking(false);
     if (!isMicMuted) {
       sendClientEvent({ type: 'input_audio_buffer.commit' }, 'commit PTT');
-      if (!isAIMuted) {
+      if (!isAIMuted && isAITalkHeld) {
         sendClientEvent({ type: 'response.create' }, 'trigger response PTT');
       }
     }
+  };
+
+  const handleAITalkButtonDown = () => {
+    if (sessionStatus !== "CONNECTED" || isAIMuted) return;
+    setIsAITalkHeld(true);
+    aiFirstUtteranceLockRef.current = true;
+    aiTalkStartMsRef.current = Date.now();
+    setMicEnabled(false);
+    sendClientEvent({ type: "input_audio_buffer.clear" }, "ai talk clear");
+    updateSession(false);
+    sendClientEvent({ type: "response.create" }, "ai talk start");
+  };
+
+  const handleAITalkButtonUp = () => {
+    setIsAITalkHeld(false);
+    aiFirstUtteranceLockRef.current = false;
+    aiTalkStartMsRef.current = null;
+    updateSession(false);
+    interrupt();
   };
 
   const onToggleConnection = () => {
@@ -819,6 +1009,20 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
           }
         />
 
+        <div className="absolute left-4 top-24 w-[360px] max-w-[40vw] pointer-events-none">
+          {backgroundBrief && (
+            <div className="bg-white/95 border border-amber-200 shadow-sm rounded-xl p-3 text-xs text-gray-700">
+              <div className="font-semibold text-amber-700">Host Notes (background)</div>
+              <div className="mt-1">{backgroundBrief}</div>
+              {backgroundBriefAt && (
+                <div className="mt-1 text-[10px] text-gray-500">
+                  Updated {new Date(backgroundBriefAt).toLocaleTimeString()}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         <div className="w-1/2 transition-all duration-200 ease-in-out overflow-hidden flex flex-col gap-2">
           <div
             className={`bg-white rounded-xl flex flex-col min-h-0 ${
@@ -859,6 +1063,9 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
         isPTTUserSpeaking={isPTTUserSpeaking}
         handleTalkButtonDown={handleTalkButtonDown}
         handleTalkButtonUp={handleTalkButtonUp}
+        isAITalkHeld={isAITalkHeld}
+        handleAITalkButtonDown={handleAITalkButtonDown}
+        handleAITalkButtonUp={handleAITalkButtonUp}
         isEventsPaneExpanded={isEventsPaneExpanded}
         setIsEventsPaneExpanded={setIsEventsPaneExpanded}
         isAudioPlaybackEnabled={isAudioPlaybackEnabled}
