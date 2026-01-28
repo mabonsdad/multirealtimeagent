@@ -1194,7 +1194,7 @@ Return JSON that includes:
           { ...scenarioConfig!, chapters: scenarioChapters },
           scenarioTotalMinutes,
         )
-      : { chapters: [], targets: [] };
+      : { targets: [] as number[] };
   const computedChapterIndex = useMemo(() => {
     if (!sessionStartMs || chapterTargets.length === 0) return 0;
     const elapsedMinutes = Math.max(
