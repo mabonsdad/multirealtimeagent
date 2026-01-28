@@ -280,7 +280,12 @@ const getMeetingStatusPayload = (
   };
 };
 
-const callResponses = async (payload: { model: string; input: any }) => {
+const callResponses = async (payload: {
+  model: string;
+  input: any;
+  tools?: any;
+  tool_choice?: any;
+}) => {
   const res = await fetch(RESPONSES_ROUTE, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
