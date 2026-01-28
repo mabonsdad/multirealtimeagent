@@ -4,11 +4,19 @@ export function applyCodecPreferences(
   codec: string,
 ): void {
   try {
+    const safeCodec = codec?.toLowerCase();
+    if (!safeCodec || safeCodec === 'opus') return;
+    if (
+      typeof navigator !== 'undefined' &&
+      navigator.userAgent.includes('Firefox')
+    ) {
+      return;
+    }
     const caps = (RTCRtpSender as any).getCapabilities?.('audio');
     if (!caps) return;
 
     const pref = caps.codecs.find(
-      (c: any) => c.mimeType.toLowerCase() === `audio/${codec.toLowerCase()}`,
+      (c: any) => c.mimeType.toLowerCase() === `audio/${safeCodec}`,
     );
     if (!pref) return;
 

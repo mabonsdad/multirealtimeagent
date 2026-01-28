@@ -2,7 +2,6 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { TranscriptItem } from "@/app/types";
 import Image from "next/image";
 import { useTranscript } from "@/app/contexts/TranscriptContext";
 import { DownloadIcon, ClipboardCopyIcon } from "@radix-ui/react-icons";
@@ -25,7 +24,6 @@ function Transcript({
 }: TranscriptProps) {
   const { transcriptItems, toggleTranscriptItemExpand } = useTranscript();
   const transcriptRef = useRef<HTMLDivElement | null>(null);
-  const [prevLogs, setPrevLogs] = useState<TranscriptItem[]>([]);
   const [justCopied, setJustCopied] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -36,20 +34,7 @@ function Transcript({
   }
 
   useEffect(() => {
-    const hasNewMessage = transcriptItems.length > prevLogs.length;
-    const hasUpdatedMessage = transcriptItems.some((newItem, index) => {
-      const oldItem = prevLogs[index];
-      return (
-        oldItem &&
-        (newItem.title !== oldItem.title || newItem.data !== oldItem.data)
-      );
-    });
-
-    if (hasNewMessage || hasUpdatedMessage) {
-      scrollToBottom();
-    }
-
-    setPrevLogs(transcriptItems);
+    scrollToBottom();
   }, [transcriptItems]);
 
   // Autofocus on text box input on load
@@ -71,7 +56,7 @@ function Transcript({
   };
 
   return (
-    <div className="flex flex-col flex-1 bg-white min-h-0 rounded-xl">
+    <div className="flex flex-col flex-1 h-full bg-white min-h-0 rounded-xl">
       <div className="flex flex-col flex-1 min-h-0">
         <div className="flex items-center justify-between px-6 py-3 sticky top-0 z-10 text-base border-b bg-white rounded-t-xl">
           <span className="font-semibold">AI conversation</span>

@@ -1,26 +1,30 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
-type ProfileRecord = {
-  profileKey: string;
-  speakerName: string;
-  profileId?: string;
-  createdAt?: string;
-  active?: boolean;
-  archivedAt?: string;
-};
+import type { ProfileRecord } from "@/app/lib/profileTypes";
 
 interface Props {
   open: boolean;
   onClose: () => void;
+  selectedProfiles: ProfileRecord[];
+  onSelectionChange: (profiles: ProfileRecord[]) => void;
 }
 
-export default function ProfileManagerModal({ open, onClose }: Props) {
+export default function ProfileManagerModal({
+  open,
+  onClose,
+  selectedProfiles,
+  onSelectionChange,
+}: Props) {
   const [profiles, setProfiles] = useState<ProfileRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState<string | null>(null);
+  const selectedKeys = useMemo(
+    () => new Set(selectedProfiles.map((p) => p.profileKey)),
+    [selectedProfiles],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -64,6 +68,14 @@ export default function ProfileManagerModal({ open, onClose }: Props) {
     }
   };
 
+  const handleToggleSelection = (profile: ProfileRecord) => {
+    const exists = selectedKeys.has(profile.profileKey);
+    const next = exists
+      ? selectedProfiles.filter((p) => p.profileKey !== profile.profileKey)
+      : [...selectedProfiles, profile];
+    onSelectionChange(next);
+  };
+
   if (!open) return null;
 
   return (
@@ -73,6 +85,9 @@ export default function ProfileManagerModal({ open, onClose }: Props) {
           <div>
             <div className="font-semibold">Transkriptor Profiles</div>
             <div className="text-xs text-gray-500">Active on Transkriptor (max 20) vs archived locally.</div>
+            <div className="text-xs text-gray-500">
+              Selected for session: {selectedProfiles.length}
+            </div>
           </div>
           <button className="text-sm text-gray-600 hover:text-gray-900" onClick={onClose}>
             Close
@@ -88,6 +103,7 @@ export default function ProfileManagerModal({ open, onClose }: Props) {
             <table className="w-full text-sm">
               <thead className="text-left text-gray-600 border-b">
                 <tr>
+                  <th className="py-2 w-24">In session</th>
                   <th className="py-2">Name</th>
                   <th className="py-2">Profile ID</th>
                   <th className="py-2">Created</th>
@@ -100,6 +116,15 @@ export default function ProfileManagerModal({ open, onClose }: Props) {
                   const isActive = p.active !== false;
                   return (
                     <tr key={p.profileKey} className="border-b last:border-0">
+                      <td className="py-2">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4"
+                          checked={selectedKeys.has(p.profileKey)}
+                          onChange={() => handleToggleSelection(p)}
+                          aria-label={`Include ${p.speakerName} in session`}
+                        />
+                      </td>
                       <td className="py-2">{p.speakerName}</td>
                       <td className="py-2">{p.profileId || "—"}</td>
                       <td className="py-2">

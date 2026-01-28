@@ -97,6 +97,7 @@ export function useHandleSessionHistory() {
       if (isUser && !text) {
         text = "[Transcribing...]";
       }
+      const hideSystemMessage = role === "system";
 
       // If the guardrail has been tripped, this message is a message that gets sent to the 
       // assistant to correct it, so we add it as a breadcrumb instead of a message.
@@ -105,7 +106,7 @@ export function useHandleSessionHistory() {
         const failureDetails = JSON.parse(guardrailMessage);
         addTranscriptBreadcrumb('Output Guardrail Active', { details: failureDetails });
       } else {
-        addTranscriptMessage(itemId, role, text);
+        addTranscriptMessage(itemId, role, text, hideSystemMessage);
       }
     }
   }

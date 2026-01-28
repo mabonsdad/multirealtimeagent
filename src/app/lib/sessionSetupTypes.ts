@@ -2,13 +2,30 @@ export type SessionSetupPrompts = {
   hostVoiceInstructions: string;
   scenarioPlannerSystemPrompt: string;
   participantExperienceSystemPrompt: string;
-  cakeOptionsSystemPrompt: string;
+  knowledgeBaseSystemPrompt: string;
   onboardingInstructions: string;
 };
 
 export type SessionSetupVoices = {
   hostVoice?: string;
   onboarding?: string;
+};
+
+export type SessionSetupChapter = {
+  id: string;
+  title?: string;
+  goal?: string;
+  targetMinutes?: number;
+  hostPrompt?: string;
+  toolCadence?: string;
+  notes?: string;
+};
+
+export type SessionSetupScenario = {
+  title: string;
+  summary?: string;
+  totalMinutes?: number;
+  chapters: SessionSetupChapter[];
 };
 
 export type SessionSetupConfig = {
@@ -19,6 +36,8 @@ export type SessionSetupConfig = {
   updatedAt?: string;
   prompts: SessionSetupPrompts;
   voices?: SessionSetupVoices;
+  knowledgeBaseFolder?: string;
+  scenario?: SessionSetupScenario;
 };
 
 export type SessionSetupSummary = {

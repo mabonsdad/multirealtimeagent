@@ -7,7 +7,6 @@ import Image from "next/image";
 
 // UI components
 import Transcript from "./components/Transcript";
-import Events from "./components/Events";
 import BottomToolbar from "./components/BottomToolbar";
 import FullTranscript from "./components/FullTranscript";
 import ProfileManagerModal from "./components/ProfileManagerModal";
@@ -29,6 +28,7 @@ import type { SessionSetupConfig } from "@/app/lib/sessionSetupTypes";
 import { DEFAULT_SESSION_SETUP_CONFIG } from "@/app/lib/sessionSetupDefaults";
 import { getTranscriptSnippetText } from "@/app/lib/transcriptStore";
 import { setBackgroundBrief } from "@/app/lib/participantBriefStore";
+import type { ProfileRecord } from "@/app/lib/profileTypes";
 
 // Agent configs
 import { allAgentSets, defaultAgentSetKey } from "@/app/agentConfigs";
@@ -42,6 +42,13 @@ import {
   agentSupervisorFacilitatedConversationScenario,
   buildAgentSupervisorScenario,
 } from "@/app/agentConfigs/agentSupervisorFacilitatedConversation";
+import {
+  setMeetingChapterOverride,
+  setMeetingKnowledgeBaseFolder,
+  setMeetingParticipants,
+  setMeetingParticipantSummary,
+  setMeetingRealtimeSnippet,
+} from "@/app/agentConfigs/agentSupervisorFacilitatedConversation/hostVoice";
 
 // Map used by connect logic for scenarios defined via the SDK.
 const sdkScenarioMap: Record<string, RealtimeAgent[]> = {
@@ -50,6 +57,34 @@ const sdkScenarioMap: Record<string, RealtimeAgent[]> = {
   chatSupervisor: chatSupervisorScenario,
   groupFacilitatedConversation: groupFacilitatedConversationScenario,
   agentSupervisorFacilitatedConversation: agentSupervisorFacilitatedConversationScenario,
+};
+
+const slugify = (value: string) =>
+  value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "session-setup";
+
+const normalizeSessionSetupConfig = (config: SessionSetupConfig) => {
+  const prompts = config.prompts || DEFAULT_SESSION_SETUP_CONFIG.prompts;
+  const legacyCakePrompt = (prompts as any).cakeOptionsSystemPrompt;
+  const mergedPrompts = {
+    ...DEFAULT_SESSION_SETUP_CONFIG.prompts,
+    ...prompts,
+    knowledgeBaseSystemPrompt:
+      prompts.knowledgeBaseSystemPrompt ||
+      legacyCakePrompt ||
+      DEFAULT_SESSION_SETUP_CONFIG.prompts.knowledgeBaseSystemPrompt,
+  };
+  return {
+    ...DEFAULT_SESSION_SETUP_CONFIG,
+    ...config,
+    prompts: mergedPrompts,
+    knowledgeBaseFolder:
+      config.knowledgeBaseFolder ||
+      slugify(config.name || config.id || "session-setup"),
+  };
 };
 
 function App() {
@@ -83,11 +118,27 @@ function App() {
   >(null);
   const [sessionSetupConfig, setSessionSetupConfig] =
     useState<SessionSetupConfig>(DEFAULT_SESSION_SETUP_CONFIG);
+  const knowledgeBaseFolder = useMemo(
+    () =>
+      sessionSetupConfig.knowledgeBaseFolder ||
+      slugify(sessionSetupConfig.name || sessionSetupConfig.id || "session-setup"),
+    [
+      sessionSetupConfig.knowledgeBaseFolder,
+      sessionSetupConfig.name,
+      sessionSetupConfig.id,
+    ],
+  );
   const [isSessionSetupModalOpen, setIsSessionSetupModalOpen] =
     useState<boolean>(false);
   const [isAITalkHeld, setIsAITalkHeld] = useState(false);
   const [backgroundBrief, setBackgroundBriefState] = useState<string>("");
   const [backgroundBriefAt, setBackgroundBriefAt] = useState<string>("");
+  const [meetingNotes, setMeetingNotes] = useState<string>("");
+  const [meetingNotesAt, setMeetingNotesAt] = useState<string>("");
+  const [manualChapterIndex, setManualChapterIndex] = useState<number | null>(
+    null,
+  );
+  const [manualChapterAt, setManualChapterAt] = useState<number | null>(null);
 
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   // Ref to identify whether the latest agent switch came from an automatic handoff
@@ -96,7 +147,11 @@ function App() {
   const aiFirstUtteranceLockRef = useRef(false);
   const aiTalkStartMsRef = useRef<number | null>(null);
   const backgroundInsightsBusyRef = useRef(false);
-  const lastBackgroundSnippetRef = useRef<string>("");
+  const lastDiarisedSnippetRef = useRef<string>("");
+  const lastRealtimeSnippetRef = useRef<string>("");
+  const lastParticipantSummaryRef = useRef<string>("");
+  const lastParticipantsUpdateRef = useRef<string>("");
+  const lastHostNotesInjectedRef = useRef<string>("");
 
   const sdkAudioElement = React.useMemo(() => {
     if (typeof window === 'undefined') return undefined;
@@ -153,8 +208,7 @@ function App() {
 
   const [sessionStatus, setSessionStatus] =
     useState<SessionStatus>("DISCONNECTED");
-  const [meetingDurationMinutes, setMeetingDurationMinutes] = useState(6);
-  const [participantNamesInput, setParticipantNamesInput] = useState("");
+  const [selectedProfiles, setSelectedProfiles] = useState<ProfileRecord[]>([]);
   const [sessionStartMs, setSessionStartMs] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -162,24 +216,14 @@ function App() {
 
   const participantNames = useMemo(
     () =>
-      participantNamesInput
-        .split(",")
-        .map((n) => n.trim())
-        .filter(Boolean),
-    [participantNamesInput],
+      selectedProfiles
+        .map((p) => p.speakerName)
+        .filter((name): name is string => Boolean(name)),
+    [selectedProfiles],
   );
 
-  const [isEventsPaneExpanded, setIsEventsPaneExpanded] =
-    useState<boolean>(() => {
-      if (typeof window === 'undefined') return false;
-      const stored = localStorage.getItem("logsExpanded");
-      if (stored !== null) return stored === "true";
-      return false;
-    });
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
   const [userText, setUserText] = useState<string>("");
-  const [isPTTActive, setIsPTTActive] = useState<boolean>(false);
-  const [isPTTUserSpeaking, setIsPTTUserSpeaking] = useState<boolean>(false);
   const [isAudioPlaybackEnabled, setIsAudioPlaybackEnabled] = useState<boolean>(
     () => {
       if (typeof window === 'undefined') return true;
@@ -187,11 +231,6 @@ function App() {
       return stored ? stored === 'true' : true;
     },
   );
-  const [isAIMuted, setIsAIMuted] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    const stored = localStorage.getItem('aiMuted');
-    return stored ? stored === 'true' : false;
-  });
   const [isMicMuted, setIsMicMuted] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     const stored = localStorage.getItem('micMuted');
@@ -209,20 +248,55 @@ function App() {
   const { startRecording, stopRecording, downloadRecording } =
     useAudioDownload();
 
-  const sendClientEvent = (eventObj: any, eventNameSuffix = "") => {
+  const sendClientEvent = useCallback((eventObj: any, eventNameSuffix = "") => {
     try {
       sendEvent(eventObj);
       logClientEvent(eventObj, eventNameSuffix);
     } catch (err) {
       console.error('Failed to send via SDK', err);
     }
-  };
+  }, [sendEvent, logClientEvent]);
 
   useHandleSessionHistory();
+
+  useEffect(() => {
+    setMeetingParticipants("cake_meeting", participantNames);
+
+    if (sessionStatus !== "CONNECTED") return;
+    const participantsText = participantNames.length
+      ? participantNames.join(", ")
+      : "(none)";
+    if (participantsText === lastParticipantsUpdateRef.current) return;
+    lastParticipantsUpdateRef.current = participantsText;
+    const id = uuidv4().slice(0, 32);
+    sendClientEvent(
+      {
+        type: "conversation.item.create",
+        item: {
+          id,
+          type: "message",
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: `[PARTICIPANTS UPDATE]\n${participantsText}\n[/PARTICIPANTS UPDATE]`,
+            },
+          ],
+        },
+      },
+      "participants_update",
+    );
+  }, [participantNames, sessionStatus, sendClientEvent]);
+
+  useEffect(() => {
+    if (!knowledgeBaseFolder) return;
+    setMeetingKnowledgeBaseFolder("cake_meeting", knowledgeBaseFolder);
+  }, [knowledgeBaseFolder]);
 
   const BACKGROUND_INSIGHTS_INTERVAL_MS = 15000;
   const BACKGROUND_SNIPPET_MAX = 50;
   const BACKGROUND_MIN_CHARS = 120;
+  const MEETING_NOTES_INTERVAL_MS = 15000;
 
   useEffect(() => {
     let finalAgentConfig = searchParams.get("agentConfig");
@@ -247,7 +321,7 @@ function App() {
         const resp = await fetch("/api/session-setup?active=1");
         const data = await resp.json();
         if (resp.ok && data?.config) {
-          setSessionSetupConfig(data.config);
+          setSessionSetupConfig(normalizeSessionSetupConfig(data.config));
         }
       } catch (err) {
         console.warn("No active session setup found", err);
@@ -277,12 +351,6 @@ function App() {
       handoffTriggeredRef.current = false;
     }
   }, [selectedAgentConfigSet, selectedAgentName, sessionStatus]);
-
-  useEffect(() => {
-    if (sessionStatus === "CONNECTED") {
-      updateSession();
-    }
-  }, [isPTTActive]);
 
   useEffect(() => {
     if (sessionStatus === "CONNECTED") {
@@ -403,10 +471,14 @@ function App() {
           agentSetKey === "agentSupervisorFacilitatedConversation" &&
           !hasSentMeetingConfig
         ) {
+          const totalMinutesForConfig =
+            sessionSetupConfig?.scenario?.totalMinutes ||
+            DEFAULT_SESSION_SETUP_CONFIG.scenario?.totalMinutes ||
+            0;
           const configText = `
 [MEETING CONFIG]
 session_id: ${idForSession}
-duration_minutes: ${meetingDurationMinutes}
+duration_minutes: ${totalMinutesForConfig || "unknown"}
 participants: ${participantNames.length ? participantNames.join(", ") : "unknown"}
 [/MEETING CONFIG]
 `.trim();
@@ -440,7 +512,6 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
   const disconnectFromRealtime = () => {
     disconnect();
     setSessionStatus("DISCONNECTED");
-    setIsPTTUserSpeaking(false);
     setHasSentMeetingConfig(false);
   };
 
@@ -457,7 +528,7 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
         content: [{ type: 'input_text', text }],
       },
     });
-    if (!isAIMuted && isAITalkHeld) {
+    if (isAITalkHeld) {
       sendClientEvent({ type: 'response.create' }, '(simulated user text message)');
     }
   };
@@ -466,17 +537,14 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     // Reflect Push-to-Talk UI state by (de)activating server VAD on the
     // backend. The Realtime SDK supports live session updates via the
     // `session.update` event.
-    const allowAutoResponse =
-      !isAIMuted && !greetingGateRef.current && isAITalkHeld;
-    const turnDetection = isPTTActive
-      ? null
-      : {
-          type: 'server_vad',
-          threshold: 0.9,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 500,
-          create_response: allowAutoResponse,
-        };
+    const allowAutoResponse = !greetingGateRef.current && isAITalkHeld;
+    const turnDetection = {
+      type: 'server_vad',
+      threshold: 0.9,
+      prefix_padding_ms: 300,
+      silence_duration_ms: 500,
+      create_response: allowAutoResponse,
+    };
 
     sendEvent({
       type: 'session.update',
@@ -488,9 +556,7 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     // Send an initial 'hi' message to trigger the agent to greet the user
     if (
       shouldTriggerResponse &&
-      !isAIMuted &&
       !isMicMuted &&
-      !isPTTActive &&
       isAITalkHeld
     ) {
       sendSimulatedUserMessage('hi');
@@ -540,6 +606,146 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     setUserText("");
   };
 
+  const computeChapterTargets = useCallback(
+    (
+      scenario: NonNullable<SessionSetupConfig["scenario"]>,
+      totalMinutes: number,
+    ) => {
+      const chapters = scenario.chapters || [];
+      const rawTargets = chapters.map((c) =>
+        c.targetMinutes && c.targetMinutes > 0 ? c.targetMinutes : 0,
+      );
+      const definedSum = rawTargets.reduce((sum, v) => sum + (v || 0), 0);
+      const missingCount = rawTargets.filter((v) => !v).length;
+      const remaining = Math.max(totalMinutes - definedSum, 0);
+      const fill = missingCount > 0 ? remaining / missingCount : 0;
+      const targets = rawTargets.map((v) => (v && v > 0 ? v : fill));
+      return { chapters, targets };
+    },
+    [],
+  );
+
+  const buildMeetingNotes = useCallback(() => {
+    if (!sessionStartMs) return "";
+    const scenario =
+      sessionSetupConfig?.scenario || DEFAULT_SESSION_SETUP_CONFIG.scenario;
+    if (!scenario || !scenario.chapters || scenario.chapters.length === 0) {
+      return "";
+    }
+
+    const totalMinutes =
+      scenario.totalMinutes ||
+      DEFAULT_SESSION_SETUP_CONFIG.scenario?.totalMinutes ||
+      0;
+    const { chapters, targets } = computeChapterTargets(scenario, totalMinutes);
+    const rawTargetSum = chapters.reduce(
+      (sum, chapter) => sum + (chapter.targetMinutes || 0),
+      0,
+    );
+    const hasTargetMinutes = chapters.some((c) => c.targetMinutes);
+
+    const now = Date.now();
+    const elapsedMinutes = Math.max(
+      Math.floor((now - sessionStartMs) / 60000),
+      0,
+    );
+    const remainingMinutesRaw = totalMinutes - elapsedMinutes;
+    const remainingMinutes = Math.max(remainingMinutesRaw, 0);
+
+    let acc = 0;
+    let chapterIndex = 0;
+    for (let i = 0; i < targets.length; i += 1) {
+      acc += targets[i];
+      if (elapsedMinutes <= acc) {
+        chapterIndex = i;
+        break;
+      }
+      chapterIndex = i;
+    }
+
+    const activeChapterIndex =
+      manualChapterIndex !== null ? manualChapterIndex : chapterIndex;
+    const chapter = chapters[activeChapterIndex];
+    const chapterTarget = targets[activeChapterIndex] ?? 0;
+    const chapterStartOffset =
+      targets.slice(0, activeChapterIndex).reduce((sum, v) => sum + v, 0);
+    const defaultChapterStartMs =
+      sessionStartMs + chapterStartOffset * 60000;
+    const chapterStartMs = manualChapterAt ?? defaultChapterStartMs;
+    const chapterElapsed = Math.max(
+      Math.floor((now - chapterStartMs) / 60000),
+      0,
+    );
+    const chapterRemainingRaw = chapterTarget - chapterElapsed;
+    const chapterRemaining = Math.max(chapterRemainingRaw, 0);
+    const nextChapter =
+      activeChapterIndex + 1 < chapters.length
+        ? chapters[activeChapterIndex + 1]
+        : null;
+
+    const lines = [
+      `Elapsed: ${elapsedMinutes} min / ${totalMinutes} min total.`,
+      `Current chapter: ${chapter?.title || chapter?.id || "Chapter"} (${chapter?.id || "n/a"}).`,
+      `Chapter timing: ${chapterElapsed} min elapsed / ${chapterTarget} min target (${chapterRemaining} min remaining).`,
+      hasTargetMinutes && rawTargetSum !== totalMinutes
+        ? `Chapter targets total ${rawTargetSum} min (auto-balanced to ${totalMinutes} min).`
+        : "",
+      chapter?.goal ? `Goal: ${chapter.goal}` : "",
+      chapter?.hostPrompt ? `Host prompt: ${chapter.hostPrompt}` : "",
+      nextChapter
+        ? `Next chapter: ${nextChapter.title || nextChapter.id} (${nextChapter.id}).`
+        : "Next chapter: (final chapter).",
+    ].filter(Boolean);
+
+    if (manualChapterIndex !== null) {
+      lines.push("Manual override active.");
+    }
+    if (chapterRemainingRaw < 0) {
+      lines.push(
+        `Chapter overrun: ${Math.abs(chapterRemainingRaw)} min past target.`,
+      );
+    }
+    if (chapterRemaining <= 0 && nextChapter) {
+      lines.push(
+        `Recommendation: move to ${nextChapter.title || nextChapter.id} now.`,
+      );
+    }
+    if (remainingMinutesRaw < 0) {
+      lines.push(
+        `Session overtime: ${Math.abs(remainingMinutesRaw)} min past end.`,
+      );
+    } else if (remainingMinutes <= 2) {
+      lines.push(
+        "Session ending soon: focus on decisions and recap.",
+      );
+    }
+
+    return lines.join("\n");
+  }, [
+    sessionStartMs,
+    sessionSetupConfig,
+    manualChapterIndex,
+    manualChapterAt,
+    computeChapterTargets,
+  ]);
+
+  const getRecentRealtimeSnippet = useCallback(() => {
+    const recent = transcriptItems
+      .filter(
+        (item) =>
+          item.type === "MESSAGE" &&
+          item.role === "user" &&
+          item.status === "DONE" &&
+          !item.isHidden,
+      )
+      .filter(
+        (item) =>
+          Boolean(item.title) && !item.title?.startsWith("[Transcribing"),
+      );
+    const last = recent[recent.length - 1];
+    return last?.title?.trim() || "";
+  }, [transcriptItems]);
+
   const runBackgroundInsights = useCallback(async () => {
     if (backgroundInsightsBusyRef.current) return;
     if (sessionStatus !== "CONNECTED") return;
@@ -548,20 +754,70 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     if (isAITalkHeld) return;
     if (!sessionId) return;
 
-    const snippet = getTranscriptSnippetText(sessionId, BACKGROUND_SNIPPET_MAX);
-    if (!snippet || snippet.length < BACKGROUND_MIN_CHARS) return;
-    if (snippet === lastBackgroundSnippetRef.current) return;
+    const diarisedSnippet = getTranscriptSnippetText(
+      sessionId,
+      BACKGROUND_SNIPPET_MAX,
+    );
+    const realtimeSnippet = getRecentRealtimeSnippet();
+    if (realtimeSnippet) {
+      setMeetingRealtimeSnippet("cake_meeting", realtimeSnippet);
+    }
+    const hasNewDiarised =
+      diarisedSnippet &&
+      diarisedSnippet !== lastDiarisedSnippetRef.current;
+    const hasNewRealtime =
+      realtimeSnippet &&
+      realtimeSnippet !== lastRealtimeSnippetRef.current;
+
+    if (!hasNewDiarised && !hasNewRealtime) return;
+
+    if (hasNewDiarised) {
+      lastDiarisedSnippetRef.current = diarisedSnippet;
+    }
+    if (hasNewRealtime) {
+      lastRealtimeSnippetRef.current = realtimeSnippet;
+    }
+
+    const selectedSnippet = hasNewDiarised
+      ? diarisedSnippet
+      : realtimeSnippet;
+    if (
+      !selectedSnippet ||
+      (!hasNewDiarised && selectedSnippet.length < BACKGROUND_MIN_CHARS)
+    ) {
+      return;
+    }
 
     backgroundInsightsBusyRef.current = true;
-    lastBackgroundSnippetRef.current = snippet;
 
     try {
       const namesText =
         participantNames.length > 0
           ? `Known participants: ${participantNames.join(", ")}.`
           : "Known participants: (not provided).";
-      const onboardingText = "Onboarding facts: (not loaded).";
-      const systemPrompt = sessionSetupConfig.prompts.participantExperienceSystemPrompt
+      const profileLines = selectedProfiles.map((p) => {
+        const summary = p.profileSummary ? ` — ${p.profileSummary}` : "";
+        return `- ${p.speakerName || "Unknown"}${summary}`;
+      });
+      const onboardingText =
+        profileLines.length > 0
+          ? `Onboarding facts:\n${profileLines.join("\n")}`
+          : "Onboarding facts: none loaded.";
+      const systemPrompt = `${sessionSetupConfig.prompts.participantExperienceSystemPrompt}
+
+You are maintaining a rolling participant insight summary across the whole session.
+- Update the summary using the newest transcript content.
+- Prioritize the most recent live transcript for near-term cues.
+- Use the diarised transcript for accuracy and attribution.
+- If the summary grows long, compress older chapters more aggressively.
+- Keep the rolling summary under ~1200 characters.
+
+Return JSON that includes:
+- rolling_summary (string)
+- recent_highlights (string, 1-3 bullets)
+- participants (array, optional)
+- group_summary (optional)
+- suggestions_for_host (optional)`.trim()
         .replace("{NAMES_TEXT}", namesText)
         .replace("{ONBOARDING_TEXT}", onboardingText);
 
@@ -580,7 +836,10 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
               content: [
                 {
                   type: "input_text",
-                  text: `Conversation snippet:\n${snippet}`,
+                  text: `Existing summary:\n${lastParticipantSummaryRef.current || "(none)"}\n\n` +
+                    `Recent live transcript (most recent, may be rough):\n${realtimeSnippet || "(none)"}\n\n` +
+                    `New diarised transcript (more accurate):\n${diarisedSnippet || "(none)"}\n\n` +
+                    "Update the rolling summary and participant insights based on the newest information.",
                 },
               ],
             },
@@ -625,21 +884,39 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
           .join(" — ");
       };
 
+      const rollingSummary =
+        (parsed && (parsed.rolling_summary || parsed.summary)) || "";
+      const recentHighlights =
+        (parsed && (parsed.recent_highlights || parsed.recent_updates)) || "";
       const brief = buildBrief(parsed) || contentText.trim();
-      if (brief) {
+      const displayText = [
+        rollingSummary ? `Summary:\n${rollingSummary}` : "",
+        recentHighlights ? `Recent:\n${recentHighlights}` : "",
+        brief && brief !== rollingSummary ? `Quick cues:\n${brief}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      if (displayText) {
         const updatedAt = new Date().toISOString();
-        setBackgroundBriefState(brief);
+        if (rollingSummary) {
+          lastParticipantSummaryRef.current = rollingSummary;
+        } else if (displayText) {
+          lastParticipantSummaryRef.current = displayText;
+        }
+        const summaryForContext = rollingSummary || displayText;
+        setMeetingParticipantSummary("cake_meeting", summaryForContext);
+        setBackgroundBriefState(displayText);
         setBackgroundBriefAt(updatedAt);
         setBackgroundBrief(sessionId, {
-          text: brief,
+          text: displayText,
           updatedAt,
-          source: "transkriptor",
+          source: hasNewDiarised ? "transkriptor" : "realtime",
           raw: parsed || contentText,
         });
         setBackgroundBrief("cake_meeting", {
-          text: brief,
+          text: displayText,
           updatedAt,
-          source: "transkriptor",
+          source: hasNewDiarised ? "transkriptor" : "realtime",
           raw: parsed || contentText,
         });
       }
@@ -653,8 +930,10 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     searchParams,
     sessionId,
     participantNames,
+    selectedProfiles,
     sessionSetupConfig,
     isAITalkHeld,
+    getRecentRealtimeSnippet,
   ]);
 
   useEffect(() => {
@@ -667,39 +946,82 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     return () => clearInterval(interval);
   }, [sessionStatus, searchParams, runBackgroundInsights]);
 
-  const handleTalkButtonDown = () => {
-    if (sessionStatus !== 'CONNECTED') return;
-    interrupt();
-
-    setIsPTTUserSpeaking(true);
-    if (!isMicMuted) {
-      sendClientEvent({ type: 'input_audio_buffer.clear' }, 'clear PTT buffer');
-    }
-
-    // No placeholder; we'll rely on server transcript once ready.
-  };
-
-  const handleTalkButtonUp = () => {
-    if (sessionStatus !== 'CONNECTED' || !isPTTUserSpeaking)
-      return;
-
-    setIsPTTUserSpeaking(false);
-    if (!isMicMuted) {
-      sendClientEvent({ type: 'input_audio_buffer.commit' }, 'commit PTT');
-      if (!isAIMuted && isAITalkHeld) {
-        sendClientEvent({ type: 'response.create' }, 'trigger response PTT');
+  useEffect(() => {
+    if (sessionStatus !== "CONNECTED") return;
+    const updateNotes = () => {
+      const notes = buildMeetingNotes();
+      if (notes) {
+        setMeetingNotes(notes);
+        setMeetingNotesAt(new Date().toISOString());
       }
+    };
+    updateNotes();
+    const interval = setInterval(updateNotes, MEETING_NOTES_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [sessionStatus, buildMeetingNotes]);
+
+  useEffect(() => {
+    if (sessionStatus === "DISCONNECTED") {
+      setMeetingNotes("");
+      setMeetingNotesAt("");
+      setManualChapterIndex(null);
+      setManualChapterAt(null);
+      setBackgroundBriefState("");
+      setBackgroundBriefAt("");
+      lastDiarisedSnippetRef.current = "";
+      lastRealtimeSnippetRef.current = "";
+      lastParticipantSummaryRef.current = "";
+      lastParticipantsUpdateRef.current = "";
+      lastHostNotesInjectedRef.current = "";
     }
-  };
+  }, [sessionStatus]);
 
   const handleAITalkButtonDown = () => {
-    if (sessionStatus !== "CONNECTED" || isAIMuted) return;
+    if (sessionStatus !== "CONNECTED") return;
     setIsAITalkHeld(true);
     aiFirstUtteranceLockRef.current = true;
     aiTalkStartMsRef.current = Date.now();
     setMicEnabled(false);
     sendClientEvent({ type: "input_audio_buffer.clear" }, "ai talk clear");
     updateSession(false);
+    const hostNotesChunks = [];
+    if (participantNames.length > 0) {
+      hostNotesChunks.push(`Participants: ${participantNames.join(", ")}`);
+    }
+    const recentRealtime = getRecentRealtimeSnippet();
+    if (recentRealtime) {
+      hostNotesChunks.push(`Recent live transcript:\n${recentRealtime}`);
+    }
+    if (meetingNotes) {
+      hostNotesChunks.push(`Schedule notes:\n${meetingNotes}`);
+    }
+    if (backgroundBrief) {
+      hostNotesChunks.push(`Participant notes:\n${backgroundBrief}`);
+    }
+    if (hostNotesChunks.length > 0) {
+      const hostNotesText = `[HOST NOTES]\n${hostNotesChunks.join("\n\n")}\n[/HOST NOTES]`;
+      if (hostNotesText !== lastHostNotesInjectedRef.current) {
+        lastHostNotesInjectedRef.current = hostNotesText;
+        const noteId = uuidv4().slice(0, 32);
+        sendClientEvent(
+          {
+            type: "conversation.item.create",
+            item: {
+              id: noteId,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: hostNotesText,
+                },
+              ],
+            },
+          },
+          "host_notes_seed",
+        );
+      }
+    }
     sendClientEvent({ type: "response.create" }, "ai talk start");
   };
 
@@ -720,17 +1042,6 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     }
   };
 
-  const onToggleMuteAI = () => {
-    setIsAIMuted((prev) => {
-      const next = !prev;
-      if (!prev) {
-        // Stop any current speech instantly.
-        interrupt();
-      }
-      return next;
-    });
-  };
-
   const onToggleMuteMic = () => {
     setIsMicMuted((prev) => {
       const next = !prev;
@@ -747,14 +1058,6 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
   };
 
   useEffect(() => {
-    const storedPushToTalkUI = localStorage.getItem("pushToTalkUI");
-    if (storedPushToTalkUI) {
-      setIsPTTActive(storedPushToTalkUI === "true");
-    }
-    const storedLogsExpanded = localStorage.getItem("logsExpanded");
-    if (storedLogsExpanded) {
-      setIsEventsPaneExpanded(storedLogsExpanded === "true");
-    }
     const storedAudioPlaybackEnabled = localStorage.getItem(
       "audioPlaybackEnabled"
     );
@@ -764,14 +1067,6 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("pushToTalkUI", isPTTActive.toString());
-  }, [isPTTActive]);
-
-  useEffect(() => {
-    localStorage.setItem("logsExpanded", isEventsPaneExpanded.toString());
-  }, [isEventsPaneExpanded]);
-
-  useEffect(() => {
     localStorage.setItem(
       "audioPlaybackEnabled",
       isAudioPlaybackEnabled.toString()
@@ -779,15 +1074,11 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
   }, [isAudioPlaybackEnabled]);
 
   useEffect(() => {
-    localStorage.setItem("aiMuted", isAIMuted.toString());
-  }, [isAIMuted]);
-
-  useEffect(() => {
     localStorage.setItem("micMuted", isMicMuted.toString());
   }, [isMicMuted]);
 
   useEffect(() => {
-    const shouldPlay = isAudioPlaybackEnabled && !isAIMuted;
+    const shouldPlay = isAudioPlaybackEnabled;
 
     if (audioElementRef.current) {
       audioElementRef.current.muted = !shouldPlay;
@@ -807,7 +1098,7 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     } catch (err) {
       console.warn('Failed to toggle SDK mute', err);
     }
-  }, [isAudioPlaybackEnabled, isAIMuted]);
+  }, [isAudioPlaybackEnabled]);
 
   // Ensure mute state is propagated to transport right after we connect or
   // whenever the SDK client reference becomes available.
@@ -820,15 +1111,6 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
       }
     }
   }, [sessionStatus, isAudioPlaybackEnabled]);
-
-  // If PTT mode is enabled, stop any ongoing speech and clear buffers so it only responds on press.
-  useEffect(() => {
-    if (sessionStatus !== "CONNECTED") return;
-    if (isPTTActive) {
-      interrupt();
-      sendClientEvent({ type: 'input_audio_buffer.clear' }, 'ptt mode on clear buffer');
-    }
-  }, [isPTTActive, sessionStatus]);
 
   // Start/stop combined recording as session status changes.
   const prevSessionStatusRef = useRef<SessionStatus | null>(null);
@@ -860,26 +1142,13 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     };
   }, [sessionStatus, startRecording, handleAudioChunk, stopRecording, getPlaybackStream, isMicMuted]);
 
-  // Re-apply session settings when AI mute or mic mute toggles.
-  const prevAIMutedRef = useRef<boolean>(isAIMuted);
+  // Re-apply session settings when mic mute toggles.
   const prevMicMutedRef = useRef<boolean>(isMicMuted);
   useEffect(() => {
-    const prevAIMuted = prevAIMutedRef.current;
     const prevMicMuted = prevMicMutedRef.current;
-    prevAIMutedRef.current = isAIMuted;
     prevMicMutedRef.current = isMicMuted;
 
     if (sessionStatus !== "CONNECTED") return;
-
-    // Reconfigure turn detection only when AI mute changes.
-    if (prevAIMuted !== isAIMuted) {
-      updateSession(false);
-    }
-
-    // If unmuting AI, optionally nudge a response so it resumes speaking.
-    if (!isAIMuted && prevAIMuted) {
-      sendClientEvent({ type: 'response.create' }, 'unmute ai resume');
-    }
 
     // Restart local recording pipeline when mic mute toggles so Assembly stream resumes correctly.
     if (prevMicMuted !== isMicMuted) {
@@ -894,7 +1163,7 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
         });
       }
     }
-  }, [isAIMuted, isMicMuted, sessionStatus, startRecording, stopRecording, handleAudioChunk, getPlaybackStream]);
+  }, [isMicMuted, sessionStatus, startRecording, stopRecording, handleAudioChunk, getPlaybackStream]);
 
   // Ensure WebRTC mic track state matches UI mute state after connect/toggles.
   useEffect(() => {
@@ -902,6 +1171,73 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
       setMicEnabled(!isMicMuted);
     }
   }, [sessionStatus, isMicMuted, setMicEnabled]);
+
+  const hostNotesUpdatedAt = meetingNotesAt || backgroundBriefAt;
+  const scenarioConfig =
+    sessionSetupConfig?.scenario || DEFAULT_SESSION_SETUP_CONFIG.scenario;
+  const scenarioChapters = scenarioConfig?.chapters || [];
+  const scenarioTotalMinutes =
+    scenarioConfig?.totalMinutes ||
+    DEFAULT_SESSION_SETUP_CONFIG.scenario?.totalMinutes ||
+    0;
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  const remainingMinutesRaw = scenarioTotalMinutes - elapsedMinutes;
+  const timeBadgeClass =
+    remainingMinutesRaw <= 0
+      ? "text-red-700 bg-red-50 border-red-200"
+      : remainingMinutesRaw <= 5
+        ? "text-amber-700 bg-amber-50 border-amber-200"
+        : "text-emerald-700 bg-emerald-50 border-emerald-200";
+  const { targets: chapterTargets } =
+    scenarioChapters.length && scenarioTotalMinutes
+      ? computeChapterTargets(
+          { ...scenarioConfig!, chapters: scenarioChapters },
+          scenarioTotalMinutes,
+        )
+      : { chapters: [], targets: [] };
+  const computedChapterIndex = useMemo(() => {
+    if (!sessionStartMs || chapterTargets.length === 0) return 0;
+    const elapsedMinutes = Math.max(
+      Math.floor((Date.now() - sessionStartMs) / 60000),
+      0,
+    );
+    let acc = 0;
+    let idx = 0;
+    for (let i = 0; i < chapterTargets.length; i += 1) {
+      acc += chapterTargets[i];
+      if (elapsedMinutes <= acc) {
+        idx = i;
+        break;
+      }
+      idx = i;
+    }
+    return idx;
+  }, [sessionStartMs, chapterTargets]);
+  const activeChapterIndex =
+    manualChapterIndex !== null ? manualChapterIndex : computedChapterIndex;
+  const activeChapter = scenarioChapters[activeChapterIndex];
+  const chapterLabel = activeChapter
+    ? `${activeChapter.title || activeChapter.id}`
+    : "Chapter";
+
+  const applyChapterOverride = (nextIndex: number) => {
+    if (!scenarioChapters.length) return;
+    const clamped = Math.max(0, Math.min(nextIndex, scenarioChapters.length - 1));
+    setManualChapterIndex(clamped);
+    setManualChapterAt(Date.now());
+    setMeetingChapterOverride("cake_meeting", clamped, scenarioConfig);
+  };
+
+  const clearChapterOverride = () => {
+    if (!scenarioChapters.length) return;
+    setManualChapterIndex(null);
+    setManualChapterAt(null);
+    setMeetingChapterOverride(
+      "cake_meeting",
+      computedChapterIndex,
+      scenarioConfig,
+    );
+  };
 
   return (
     <div className="text-base flex flex-col h-screen bg-gray-100 text-gray-800 relative">
@@ -924,44 +1260,6 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
           </div>
         </div>
         <div className="flex flex-wrap md:flex-nowrap items-center justify-end gap-3">
-          <label className="flex items-center gap-2 text-sm">
-            Duration (min)
-            <input
-              type="number"
-              min={3}
-              max={30}
-              value={meetingDurationMinutes}
-              onChange={(e) =>
-                setMeetingDurationMinutes(Number(e.target.value) || 6)
-              }
-              className="w-16 border rounded px-1 py-0.5 text-sm"
-            />
-          </label>
-
-          <label className="flex items-center gap-2 text-sm">
-            Participants
-            <input
-              type="text"
-              placeholder="Alex, Sam, Taylor"
-              value={participantNamesInput}
-              onChange={(e) => setParticipantNamesInput(e.target.value)}
-              className="border rounded px-2 py-0.5 text-sm min-w-[220px]"
-            />
-          </label>
-
-          {participantNames.length > 0 && (
-            <div className="flex flex-wrap gap-1 text-xs text-gray-600">
-              {participantNames.map((name) => (
-                <span
-                  key={name}
-                  className="px-2 py-0.5 rounded-full border border-gray-300 bg-gray-50"
-                >
-                  {name}
-                </span>
-              ))}
-            </div>
-          )}
-
           {/* Scenario/Agent selectors temporarily hidden */}
 
           <button
@@ -985,11 +1283,11 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
           )}
 
           {sessionStartMs && (
-            <div className="text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-1 text-right whitespace-nowrap">
-              Time: {Math.floor(elapsedSeconds / 60)}:
+            <div className={`text-sm font-semibold rounded px-3 py-1 text-right whitespace-nowrap border ${timeBadgeClass}`}>
+              Time: {elapsedMinutes}:
               {(elapsedSeconds % 60).toString().padStart(2, "0")} elapsed{" · "}
               ~{Math.max(
-                meetingDurationMinutes - Math.floor(elapsedSeconds / 60),
+                remainingMinutesRaw,
                 0,
               )}{" "}
               min remaining
@@ -998,37 +1296,23 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
         </div>
       </div>
 
-      <div className="flex flex-1 gap-2 px-2 overflow-hidden relative">
-        <Transcript
-          userText={userText}
-          setUserText={setUserText}
-          onSendMessage={handleSendTextMessage}
-          downloadRecording={downloadRecording}
-          canSend={
-            sessionStatus === "CONNECTED"
-          }
-        />
-
-        <div className="absolute left-4 top-24 w-[360px] max-w-[40vw] pointer-events-none">
-          {backgroundBrief && (
-            <div className="bg-white/95 border border-amber-200 shadow-sm rounded-xl p-3 text-xs text-gray-700">
-              <div className="font-semibold text-amber-700">Host Notes (background)</div>
-              <div className="mt-1">{backgroundBrief}</div>
-              {backgroundBriefAt && (
-                <div className="mt-1 text-[10px] text-gray-500">
-                  Updated {new Date(backgroundBriefAt).toLocaleTimeString()}
-                </div>
-              )}
-            </div>
-          )}
+      <div className="flex flex-1 gap-2 px-2 overflow-hidden">
+        <div className="w-1/2 min-h-0 flex flex-col">
+          <div className="flex-1 min-h-0">
+            <Transcript
+              userText={userText}
+              setUserText={setUserText}
+              onSendMessage={handleSendTextMessage}
+              downloadRecording={downloadRecording}
+              canSend={
+                sessionStatus === "CONNECTED"
+              }
+            />
+          </div>
         </div>
 
-        <div className="w-1/2 transition-all duration-200 ease-in-out overflow-hidden flex flex-col gap-2">
-          <div
-            className={`bg-white rounded-xl flex flex-col min-h-0 ${
-              isEventsPaneExpanded ? "flex-[2]" : "flex-1"
-            }`}
-          >
+        <div className="w-1/2 min-h-0 transition-all duration-200 ease-in-out overflow-hidden flex flex-col gap-2">
+          <div className="bg-white rounded-xl flex flex-col min-h-0 flex-1">
             <div className="flex items-center justify-between px-6 py-3.5 text-base border-b bg-white rounded-t-xl">
               <span className="font-semibold">Full Transcript</span>
               <span className="text-xs text-gray-500">
@@ -1047,31 +1331,116 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
               error={transcriptionError}
             />
           </div>
-          {isEventsPaneExpanded && (
-            <div className="flex-[1] min-h-0">
-              <Events isExpanded={isEventsPaneExpanded} />
+
+          <div className="flex-1 min-h-0 bg-white rounded-xl border border-amber-100 flex flex-col">
+            <div className="px-6 py-3 text-base border-b bg-white rounded-t-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-amber-700">Host Notes</span>
+                <span className="text-xs text-gray-500">
+                  {hostNotesUpdatedAt
+                    ? `Updated ${new Date(hostNotesUpdatedAt).toLocaleTimeString()}`
+                    : "Listening..."}
+                </span>
+              </div>
+              {scenarioChapters.length > 0 && (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-gray-600">Chapter</span>
+                  <button
+                    type="button"
+                    onClick={() => applyChapterOverride(activeChapterIndex - 1)}
+                    disabled={activeChapterIndex <= 0}
+                    className="px-2 py-1 rounded border border-gray-300 bg-white disabled:opacity-40"
+                    aria-label="Previous chapter"
+                  >
+                    ◀
+                  </button>
+                  <div
+                    className={`px-2 py-1 rounded border text-xs ${
+                      manualChapterIndex !== null
+                        ? "border-amber-300 bg-amber-50 text-amber-800"
+                        : "border-gray-200 bg-white text-gray-700"
+                    }`}
+                  >
+                    {activeChapterIndex + 1}/{scenarioChapters.length}: {chapterLabel}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => applyChapterOverride(activeChapterIndex + 1)}
+                    disabled={activeChapterIndex >= scenarioChapters.length - 1}
+                    className="px-2 py-1 rounded border border-gray-300 bg-white disabled:opacity-40"
+                    aria-label="Next chapter"
+                  >
+                    ▶
+                  </button>
+                  {manualChapterIndex !== null && (
+                    <button
+                      type="button"
+                      onClick={clearChapterOverride}
+                      className="px-2 py-1 rounded border border-amber-300 text-amber-700 bg-amber-50"
+                    >
+                      Auto
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
-          )}
+            <div className="p-4 overflow-auto text-sm text-gray-700 whitespace-pre-wrap space-y-4">
+              <div>
+                <div className="text-xs font-semibold text-amber-700 uppercase tracking-wide">
+                  Participants
+                </div>
+                <div className="mt-1 whitespace-pre-wrap">
+                  {participantNames.length > 0 ? (
+                    participantNames.join(", ")
+                  ) : (
+                    <span className="text-gray-400 italic">
+                      No participants selected.
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-amber-700 uppercase tracking-wide">
+                  Schedule and chapters
+                </div>
+                {participantNames.length > 0 && (
+                  <div className="mt-1 text-xs text-gray-600">
+                    Participants: {participantNames.join(", ")}
+                  </div>
+                )}
+                <div className="mt-1 whitespace-pre-wrap">
+                  {meetingNotes || (
+                    <span className="text-gray-400 italic">
+                      No schedule notes yet.
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-amber-700 uppercase tracking-wide">
+                  Participant insights
+                </div>
+                <div className="mt-1 whitespace-pre-wrap">
+                  {backgroundBrief || (
+                    <span className="text-gray-400 italic">
+                      No participant notes yet.
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
       <BottomToolbar
         sessionStatus={sessionStatus}
         onToggleConnection={onToggleConnection}
-        isPTTActive={isPTTActive}
-        setIsPTTActive={setIsPTTActive}
-        isPTTUserSpeaking={isPTTUserSpeaking}
-        handleTalkButtonDown={handleTalkButtonDown}
-        handleTalkButtonUp={handleTalkButtonUp}
         isAITalkHeld={isAITalkHeld}
         handleAITalkButtonDown={handleAITalkButtonDown}
         handleAITalkButtonUp={handleAITalkButtonUp}
-        isEventsPaneExpanded={isEventsPaneExpanded}
-        setIsEventsPaneExpanded={setIsEventsPaneExpanded}
         isAudioPlaybackEnabled={isAudioPlaybackEnabled}
         setIsAudioPlaybackEnabled={setIsAudioPlaybackEnabled}
-        isAIMuted={isAIMuted}
-        onToggleAIMute={onToggleMuteAI}
         isMicMuted={isMicMuted}
         onToggleMicMute={onToggleMuteMic}
         codec={urlCodec}
@@ -1080,11 +1449,15 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
       <ProfileManagerModal
         open={isProfileModalOpen}
         onClose={() => setIsProfileModalOpen(false)}
+        selectedProfiles={selectedProfiles}
+        onSelectionChange={setSelectedProfiles}
       />
       <SessionSetupModal
         open={isSessionSetupModalOpen}
         onClose={() => setIsSessionSetupModalOpen(false)}
-        onApply={(config) => setSessionSetupConfig(config)}
+        onApply={(config) =>
+          setSessionSetupConfig(normalizeSessionSetupConfig(config))
+        }
         isSessionActive={
           sessionStatus === "CONNECTED" || sessionStatus === "CONNECTING"
         }

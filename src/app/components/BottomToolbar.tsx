@@ -4,20 +4,11 @@ import { SessionStatus } from "@/app/types";
 interface BottomToolbarProps {
   sessionStatus: SessionStatus;
   onToggleConnection: () => void;
-  isPTTActive: boolean;
-  setIsPTTActive: (val: boolean) => void;
-  isPTTUserSpeaking: boolean;
-  handleTalkButtonDown: () => void;
-  handleTalkButtonUp: () => void;
   isAITalkHeld: boolean;
   handleAITalkButtonDown: () => void;
   handleAITalkButtonUp: () => void;
-  isEventsPaneExpanded: boolean;
-  setIsEventsPaneExpanded: (val: boolean) => void;
   isAudioPlaybackEnabled: boolean;
   setIsAudioPlaybackEnabled: (val: boolean) => void;
-  isAIMuted: boolean;
-  onToggleAIMute: () => void;
   isMicMuted: boolean;
   onToggleMicMute: () => void;
   codec: string;
@@ -27,20 +18,11 @@ interface BottomToolbarProps {
 function BottomToolbar({
   sessionStatus,
   onToggleConnection,
-  isPTTActive,
-  setIsPTTActive,
-  isPTTUserSpeaking,
-  handleTalkButtonDown,
-  handleTalkButtonUp,
   isAITalkHeld,
   handleAITalkButtonDown,
   handleAITalkButtonUp,
-  isEventsPaneExpanded,
-  setIsEventsPaneExpanded,
   isAudioPlaybackEnabled,
   setIsAudioPlaybackEnabled,
-  isAIMuted,
-  onToggleAIMute,
   isMicMuted,
   onToggleMicMute,
   codec,
@@ -54,27 +36,6 @@ function BottomToolbar({
     const newCodec = e.target.value;
     onCodecChange(newCodec);
   };
-
-  const modeSwitch = (
-    <div className="flex flex-col items-center gap-1">
-      <span className="text-xs uppercase tracking-wide text-gray-600">Mode</span>
-      <button
-        onClick={() => setIsPTTActive(!isPTTActive)}
-        className={`relative inline-flex h-6 w-14 items-center rounded-full transition ${
-          isPTTActive ? "bg-gray-900" : "bg-gray-300"
-        }`}
-      >
-        <span
-          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${
-            isPTTActive ? "translate-x-8" : "translate-x-1"
-          }`}
-        />
-      </button>
-      <span className="text-xs text-gray-600">
-        {isPTTActive ? "Push to Talk" : "Hands-free"}
-      </span>
-    </div>
-  );
 
   function getConnectionButtonLabel() {
     if (isConnected) return "Disconnect";
@@ -105,97 +66,44 @@ function BottomToolbar({
           {getConnectionButtonLabel()}
         </button>
 
-        <div className="flex flex-row items-center gap-4">
-          <div
-            className={`flex flex-col gap-2 p-3 rounded-lg border min-w-[240px] ${
-              isPTTActive
-                ? "bg-gray-100 border-gray-200 opacity-60"
-                : "bg-white border-gray-200"
-            }`}
-          >
-            <div className="text-sm font-semibold text-gray-800">
-              Hands-free controls
-            </div>
-            <div className="flex flex-row flex-wrap gap-2">
-              <button
-                onClick={onToggleAIMute}
-                className={`text-white text-sm px-3 py-2 rounded-md ${
-                  isAIMuted
-                    ? "bg-red-600 hover:bg-red-700"
-                    : "bg-gray-600 hover:bg-gray-700"
-                } ${isPTTActive ? "opacity-50 cursor-not-allowed" : ""}`}
-                disabled={isPTTActive}
-              >
-                {isAIMuted ? "AI Muted" : "Mute AI"}
-              </button>
-              <button
-                onClick={onToggleMicMute}
-                className={`text-white text-sm px-3 py-2 rounded-md ${
-                  isMicMuted
-                    ? "bg-red-500 hover:bg-red-600"
-                    : "bg-gray-600 hover:bg-gray-700"
-                } ${isPTTActive ? "opacity-50 cursor-not-allowed" : ""}`}
-                disabled={!isConnected || isPTTActive}
-              >
-                {isMicMuted ? "Mic Muted" : "Mute Mic"}
-              </button>
-            </div>
-          </div>
-
-          {modeSwitch}
-
-          <div
-            className={`flex flex-col gap-2 p-3 rounded-lg border min-w-[240px] ${
-              isPTTActive
-                ? "bg-white border-gray-200"
-                : "bg-gray-100 border-gray-200 opacity-60"
-            }`}
-          >
-            <div className="text-sm font-semibold text-gray-800">
-              Push to talk
-            </div>
+        <div className="flex flex-row items-center gap-3">
           <button
-            onMouseDown={handleTalkButtonDown}
-            onMouseUp={handleTalkButtonUp}
-            onTouchStart={handleTalkButtonDown}
-            onTouchEnd={handleTalkButtonUp}
-            disabled={!isPTTActive}
-            className={
-              "py-2 px-4 rounded-md text-base transition-colors " +
-              (isPTTActive
-                ? isPTTUserSpeaking
-                  ? "bg-green-600 text-white"
-                  : "bg-gray-900 text-white hover:bg-black"
-                : "bg-gray-100 text-gray-400 cursor-not-allowed")
-            }
+            onClick={onToggleMicMute}
+            className={`text-xs px-3 py-1.5 rounded-md border ${
+              isMicMuted
+                ? "bg-red-600 text-white border-red-600"
+                : "bg-white text-gray-800 border-gray-300 hover:bg-gray-50"
+            } ${!isConnected ? "opacity-50 cursor-not-allowed" : ""}`}
+            disabled={!isConnected}
           >
-            Push to Talk
+            {isMicMuted ? "Mic Muted" : "Mic On"}
           </button>
-        </div>
 
-        <div className="flex flex-col gap-2 p-3 rounded-lg border min-w-[240px] bg-white border-gray-200">
-          <div className="text-sm font-semibold text-gray-800">
-            AI speak control
+          <div className="flex flex-col gap-2 p-3 rounded-lg border min-w-[220px] bg-white border-gray-200">
+            <div className="text-sm font-semibold text-gray-800">
+              AI speak control
+            </div>
+            <div className="text-xs text-gray-600">
+              {isAITalkHeld ? "Speaking enabled" : "Listen-only (silent)"}
+            </div>
+            <button
+              onMouseDown={handleAITalkButtonDown}
+              onMouseUp={handleAITalkButtonUp}
+              onMouseLeave={handleAITalkButtonUp}
+              onTouchStart={handleAITalkButtonDown}
+              onTouchEnd={handleAITalkButtonUp}
+              disabled={!isConnected}
+              className={
+                "py-2 px-4 rounded-md text-base transition-colors " +
+                (isAITalkHeld
+                  ? "bg-emerald-600 text-white"
+                  : "bg-gray-900 text-white hover:bg-black") +
+                (isConnected ? "" : " opacity-50 cursor-not-allowed")
+              }
+            >
+              Hold to let AI speak
+            </button>
           </div>
-          <div className="text-xs text-gray-600">
-            {isAITalkHeld ? "Speaking enabled" : "Listen-only (silent)"}
-          </div>
-          <button
-            onMouseDown={handleAITalkButtonDown}
-            onMouseUp={handleAITalkButtonUp}
-            onMouseLeave={handleAITalkButtonUp}
-            onTouchStart={handleAITalkButtonDown}
-            onTouchEnd={handleAITalkButtonUp}
-            className={
-              "py-2 px-4 rounded-md text-base transition-colors " +
-              (isAITalkHeld
-                ? "bg-emerald-600 text-white"
-                : "bg-gray-900 text-white hover:bg-black")
-            }
-          >
-            Hold to let AI speak
-          </button>
-        </div>
         </div>
       </div>
 
@@ -239,17 +147,6 @@ function BottomToolbar({
                   className="w-4 h-4"
                 />
                 Audio playback
-              </label>
-
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  id="logs"
-                  type="checkbox"
-                  checked={isEventsPaneExpanded}
-                  onChange={(e) => setIsEventsPaneExpanded(e.target.checked)}
-                  className="w-4 h-4"
-                />
-                Logs
               </label>
 
               <div className="flex flex-col gap-1 text-sm">

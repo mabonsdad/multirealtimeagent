@@ -215,17 +215,9 @@ sequenceDiagram
 Assistant messages are checked for safety and compliance before they are shown in the UI.  The guardrail call now lives directly inside `src/app/App.tsx`: when a `response.text.delta` stream starts we mark the message as **IN_PROGRESS**, and once the server emits `guardrail_tripped` or `response.done` we mark the message as **FAIL** or **PASS** respectively.  If you want to change how moderation is triggered or displayed, search for `guardrail_tripped` inside `App.tsx` and tweak the logic there.
 
 ## Navigating the UI
-- You can select agent scenarios in the Scenario dropdown, and automatically switch to a specific agent with the Agent dropdown.
+- Click connect to start a coversation. 
 - The conversation transcript is on the left, including tool calls, tool call responses, and agent changes. Click to expand non-message elements.
 - The event log is on the right, showing both client and server events. Click to see the full payload.
 - On the bottom, you can disconnect, toggle between automated voice-activity detection or PTT, turn off audio playback, and toggle logs.
 
-## Pull Requests
 
-Feel free to open an issue or pull request and we'll do our best to review it. The spirit of this repo is to demonstrate the core logic for new agentic flows; PRs that go beyond this core scope will likely not be merged.
-
-# Core Contributors
-- Noah MacCallum - [noahmacca](https://x.com/noahmacca)
-- Ilan Bigio - [ibigio](https://github.com/ibigio)
-- Brian Fioca - [bfioca](https://github.com/bfioca)
-# multirealtimeagent
