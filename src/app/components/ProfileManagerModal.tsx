@@ -9,6 +9,7 @@ interface Props {
   onClose: () => void;
   selectedProfiles: ProfileRecord[];
   onSelectionChange: (profiles: ProfileRecord[]) => void;
+  getAIVoiceSampleBase64: (durationMs: number) => Promise<string>;
 }
 
 export default function ProfileManagerModal({
@@ -16,34 +17,41 @@ export default function ProfileManagerModal({
   onClose,
   selectedProfiles,
   onSelectionChange,
+  getAIVoiceSampleBase64,
 }: Props) {
   const [profiles, setProfiles] = useState<ProfileRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState<string | null>(null);
+  const [aiSpeakerName, setAiSpeakerName] = useState("AI Host");
+  const [aiDurationSec, setAiDurationSec] = useState(30);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiStatus, setAiStatus] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
   const selectedKeys = useMemo(
     () => new Set(selectedProfiles.map((p) => p.profileKey)),
     [selectedProfiles],
   );
 
+  const loadProfiles = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const resp = await fetch("/api/transkriptor/profiles");
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data?.error || "Load failed");
+      setProfiles(data.profiles || []);
+    } catch (err: any) {
+      console.error("load profiles", err);
+      setError(err?.message || "Failed to load profiles");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!open) return;
-    const load = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const resp = await fetch("/api/transkriptor/profiles");
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data?.error || "Load failed");
-        setProfiles(data.profiles || []);
-      } catch (err: any) {
-        console.error("load profiles", err);
-        setError(err?.message || "Failed to load profiles");
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
+    loadProfiles();
   }, [open]);
 
   const handleDelete = async (profileKey: string) => {
@@ -65,6 +73,43 @@ export default function ProfileManagerModal({
       setError(err?.message || "Delete failed");
     } finally {
       setDeleteBusy(null);
+    }
+  };
+
+  const handleCreateAIVoiceProfile = async () => {
+    if (!aiSpeakerName.trim()) {
+      setAiError("Please enter a name for the AI profile.");
+      return;
+    }
+    setAiBusy(true);
+    setAiError(null);
+    setAiStatus("Recording AI audio sample...");
+    try {
+      const audioBase64 = await getAIVoiceSampleBase64(
+        Math.max(aiDurationSec, 10) * 1000,
+      );
+      setAiStatus("Uploading to Transkriptor...");
+      const resp = await fetch("/api/transkriptor/profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          speakerName: aiSpeakerName.trim(),
+          audioBase64,
+          profileSummary: "AI voice profile",
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data?.error || "Failed to create AI profile");
+      }
+      setAiStatus("AI profile created.");
+      await loadProfiles();
+    } catch (err: any) {
+      console.error("AI profile create", err);
+      setAiError(err?.message || "Failed to create AI profile");
+      setAiStatus(null);
+    } finally {
+      setAiBusy(false);
     }
   };
 
@@ -92,6 +137,38 @@ export default function ProfileManagerModal({
           <button className="text-sm text-gray-600 hover:text-gray-900" onClick={onClose}>
             Close
           </button>
+        </div>
+        <div className="px-5 py-4 border-b bg-gray-50">
+          <div className="text-sm font-semibold">Create AI voice profile</div>
+          <div className="text-xs text-gray-500 mt-1">
+            Tip: start this while the AI is speaking for a clean sample (30–60s).
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <input
+              className="border rounded-md px-2 py-1 text-xs"
+              value={aiSpeakerName}
+              onChange={(e) => setAiSpeakerName(e.target.value)}
+              placeholder="AI profile name"
+            />
+            <select
+              className="border rounded-md px-2 py-1 text-xs"
+              value={aiDurationSec}
+              onChange={(e) => setAiDurationSec(Number(e.target.value))}
+            >
+              <option value={30}>30s sample</option>
+              <option value={45}>45s sample</option>
+              <option value={60}>60s sample</option>
+            </select>
+            <button
+              className="text-xs px-3 py-1 rounded-md bg-indigo-600 text-white disabled:opacity-50"
+              disabled={aiBusy}
+              onClick={handleCreateAIVoiceProfile}
+            >
+              {aiBusy ? "Capturing..." : "Record & create"}
+            </button>
+          </div>
+          {aiStatus && <div className="text-xs text-emerald-700 mt-2">{aiStatus}</div>}
+          {aiError && <div className="text-xs text-red-600 mt-2">{aiError}</div>}
         </div>
         <div className="p-5 overflow-auto space-y-3">
           {loading && <div className="text-sm text-gray-600">Loading...</div>}

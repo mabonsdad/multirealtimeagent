@@ -5,6 +5,7 @@ type StartRecordingOptions = {
   chunkDurationMs?: number;
   chunkHopMs?: number;
   includeMic?: boolean;
+  includeRemote?: boolean;
   onChunk?: (blob: Blob, chunkIndex: number) => void | Promise<void>;
 };
 
@@ -28,6 +29,7 @@ function useAudioDownload() {
   const startRecording = useCallback(
     async (remoteStream: MediaStream, options: StartRecordingOptions = {}) => {
       const includeMic = options.includeMic ?? true;
+      const includeRemote = options.includeRemote ?? true;
 
       let micStream: MediaStream = new MediaStream();
       if (includeMic) {
@@ -48,44 +50,48 @@ function useAudioDownload() {
 
       // Mix remote + mic with channel separation to help diarisation.
       let combinedStream: MediaStream | null = null;
-      try {
-        const remoteRate = remoteStream.getAudioTracks()[0]?.getSettings().sampleRate;
-        const micRate = micStream.getAudioTracks()[0]?.getSettings().sampleRate;
-        const targetSampleRate = remoteRate || micRate;
-        const audioContext = targetSampleRate
-          ? new AudioContext({ sampleRate: targetSampleRate })
-          : new AudioContext();
-        audioContextRef.current = audioContext;
-
-        const destination = audioContext.createMediaStreamDestination();
-        const merger = audioContext.createChannelMerger(2);
-
-        // Remote → left channel (0)
+      if (!includeRemote) {
+        combinedStream = micStream;
+      } else {
         try {
-          const remoteSource = audioContext.createMediaStreamSource(remoteStream);
-          remoteSource.channelCountMode = "explicit";
-          remoteSource.channelInterpretation = "discrete";
-          remoteSource.connect(merger, 0, 0);
-        } catch (err) {
-          console.error("Error connecting remote stream to the audio context:", err);
-        }
+          const remoteRate = remoteStream.getAudioTracks()[0]?.getSettings().sampleRate;
+          const micRate = micStream.getAudioTracks()[0]?.getSettings().sampleRate;
+          const targetSampleRate = remoteRate || micRate;
+          const audioContext = targetSampleRate
+            ? new AudioContext({ sampleRate: targetSampleRate })
+            : new AudioContext();
+          audioContextRef.current = audioContext;
 
-        // Mic → right channel (1) if present
-        if (micStream.getAudioTracks().length > 0) {
+          const destination = audioContext.createMediaStreamDestination();
+          const merger = audioContext.createChannelMerger(2);
+
+          // Remote → left channel (0)
           try {
-            const micSource = audioContext.createMediaStreamSource(micStream);
-            micSource.channelCountMode = "explicit";
-            micSource.channelInterpretation = "discrete";
-            micSource.connect(merger, 0, 1);
+            const remoteSource = audioContext.createMediaStreamSource(remoteStream);
+            remoteSource.channelCountMode = "explicit";
+            remoteSource.channelInterpretation = "discrete";
+            remoteSource.connect(merger, 0, 0);
           } catch (err) {
-            console.error("Error connecting microphone stream to the audio context:", err);
+            console.error("Error connecting remote stream to the audio context:", err);
           }
-        }
 
-        merger.connect(destination);
-        combinedStream = destination.stream;
-      } catch (err) {
-        console.error("AudioContext mix failed", err);
+          // Mic → right channel (1) if present
+          if (micStream.getAudioTracks().length > 0) {
+            try {
+              const micSource = audioContext.createMediaStreamSource(micStream);
+              micSource.channelCountMode = "explicit";
+              micSource.channelInterpretation = "discrete";
+              micSource.connect(merger, 0, 1);
+            } catch (err) {
+              console.error("Error connecting microphone stream to the audio context:", err);
+            }
+          }
+
+          merger.connect(destination);
+          combinedStream = destination.stream;
+        } catch (err) {
+          console.error("AudioContext mix failed", err);
+        }
       }
 
       if (!combinedStream) {
