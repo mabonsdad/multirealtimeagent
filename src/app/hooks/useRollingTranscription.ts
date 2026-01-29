@@ -34,8 +34,8 @@ const DEFAULT_LAMBDA_BASE =
   "https://7dbkxxj6b1.execute-api.eu-west-2.amazonaws.com/default";
 
 const POLL_INTERVAL_MS = 5000;
-export const FULL_TRANSCRIPT_CHUNK_MS = 40_000; // duration of each chunk sent to Lambda
-export const FULL_TRANSCRIPT_HOP_MS = 25_000; // stride between chunks (15s overlap for stability)
+export const FULL_TRANSCRIPT_CHUNK_MS = 60_000; // duration of each chunk sent to Lambda
+export const FULL_TRANSCRIPT_HOP_MS = 40_000; // stride between chunks (20s overlap for stability)
 
 // Helper: convert blob to base64 (no prefix)
 const blobToBase64 = (blob: Blob): Promise<string> => {

@@ -32,7 +32,13 @@ function useAudioDownload() {
       let micStream: MediaStream = new MediaStream();
       if (includeMic) {
         try {
-          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          micStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+          });
         } catch (err) {
           console.error("Error getting microphone stream:", err);
           // Fallback to an empty MediaStream if microphone access fails.
@@ -89,7 +95,7 @@ function useAudioDownload() {
 
       const recorderOptions: MediaRecorderOptions = {
         mimeType: "audio/webm;codecs=opus",
-        audioBitsPerSecond: 64000,
+        audioBitsPerSecond: 128000,
       };
 
       const startSegmentRecorder = () => {
