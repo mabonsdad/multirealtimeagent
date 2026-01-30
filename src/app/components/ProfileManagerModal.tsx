@@ -9,7 +9,6 @@ interface Props {
   onClose: () => void;
   selectedProfiles: ProfileRecord[];
   onSelectionChange: (profiles: ProfileRecord[]) => void;
-  getAIVoiceSampleBase64: (durationMs: number) => Promise<string>;
 }
 
 export default function ProfileManagerModal({
@@ -17,14 +16,13 @@ export default function ProfileManagerModal({
   onClose,
   selectedProfiles,
   onSelectionChange,
-  getAIVoiceSampleBase64,
 }: Props) {
   const [profiles, setProfiles] = useState<ProfileRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState<string | null>(null);
   const [aiSpeakerName, setAiSpeakerName] = useState("AI Host");
-  const [aiDurationSec, setAiDurationSec] = useState(30);
+  const [aiFile, setAiFile] = useState<File | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiStatus, setAiStatus] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -54,6 +52,18 @@ export default function ProfileManagerModal({
     loadProfiles();
   }, [open]);
 
+  const fileToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        const base64 = result.split(",")[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
   const handleDelete = async (profileKey: string) => {
     setDeleteBusy(profileKey);
     setError(null);
@@ -81,14 +91,15 @@ export default function ProfileManagerModal({
       setAiError("Please enter a name for the AI profile.");
       return;
     }
+    if (!aiFile) {
+      setAiError("Please upload an audio clip for the AI profile.");
+      return;
+    }
     setAiBusy(true);
     setAiError(null);
-    setAiStatus("Recording AI audio sample...");
+    setAiStatus("Uploading AI audio sample...");
     try {
-      const audioBase64 = await getAIVoiceSampleBase64(
-        Math.max(aiDurationSec, 10) * 1000,
-      );
-      setAiStatus("Uploading to Transkriptor...");
+      const audioBase64 = await fileToBase64(aiFile);
       const resp = await fetch("/api/transkriptor/profiles", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -103,6 +114,7 @@ export default function ProfileManagerModal({
         throw new Error(data?.error || "Failed to create AI profile");
       }
       setAiStatus("AI profile created.");
+      setAiFile(null);
       await loadProfiles();
     } catch (err: any) {
       console.error("AI profile create", err);
@@ -141,7 +153,7 @@ export default function ProfileManagerModal({
         <div className="px-5 py-4 border-b bg-gray-50">
           <div className="text-sm font-semibold">Create AI voice profile</div>
           <div className="text-xs text-gray-500 mt-1">
-            Tip: start this while the AI is speaking for a clean sample (30–60s).
+            Upload a clean 45s clip of the AI speaking.
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <input
@@ -150,21 +162,17 @@ export default function ProfileManagerModal({
               onChange={(e) => setAiSpeakerName(e.target.value)}
               placeholder="AI profile name"
             />
-            <select
-              className="border rounded-md px-2 py-1 text-xs"
-              value={aiDurationSec}
-              onChange={(e) => setAiDurationSec(Number(e.target.value))}
-            >
-              <option value={30}>30s sample</option>
-              <option value={45}>45s sample</option>
-              <option value={60}>60s sample</option>
-            </select>
+            <input
+              type="file"
+              className="text-xs"
+              onChange={(e) => setAiFile(e.target.files?.[0] || null)}
+            />
             <button
               className="text-xs px-3 py-1 rounded-md bg-indigo-600 text-white disabled:opacity-50"
-              disabled={aiBusy}
+              disabled={aiBusy || !aiFile}
               onClick={handleCreateAIVoiceProfile}
             >
-              {aiBusy ? "Capturing..." : "Record & create"}
+              {aiBusy ? "Uploading..." : "Create profile"}
             </button>
           </div>
           {aiStatus && <div className="text-xs text-emerald-700 mt-2">{aiStatus}</div>}

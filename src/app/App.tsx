@@ -606,80 +606,6 @@ participants: ${participantNames.length ? participantNames.join(", ") : "unknown
     setUserText("");
   };
 
-  const blobToBase64 = (blob: Blob): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const result = reader.result as string;
-        const base64 = result.split(",")[1];
-        resolve(base64);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-
-  const recordRemoteAudioSample = useCallback(
-    async (durationMs: number) => {
-      if (sessionStatus !== "CONNECTED") {
-        throw new Error("Connect to the AI session before recording.");
-      }
-      if (!isAudioPlaybackEnabled) {
-        throw new Error("Enable AI audio playback before recording.");
-      }
-      const stream = getPlaybackStream();
-      if (!stream || stream.getAudioTracks().length === 0) {
-        throw new Error("No AI audio stream available.");
-      }
-      if (typeof MediaRecorder === "undefined") {
-        throw new Error("MediaRecorder is not supported in this browser.");
-      }
-
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : "";
-      const recorderOptions: MediaRecorderOptions = mimeType
-        ? { mimeType, audioBitsPerSecond: 128000 }
-        : { audioBitsPerSecond: 128000 };
-
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        const chunks: Blob[] = [];
-        const recorder = new MediaRecorder(stream, recorderOptions);
-        recorder.ondataavailable = (event) => {
-          if (event.data && event.data.size > 0) {
-            chunks.push(event.data);
-          }
-        };
-        recorder.onerror = () => {
-          reject(new Error("Failed to record AI audio."));
-        };
-        recorder.onstop = () => {
-          resolve(
-            new Blob(chunks, {
-              type: recorder.mimeType || "audio/webm",
-            }),
-          );
-        };
-        recorder.start();
-        const stopAt = Math.max(durationMs, 1000);
-        setTimeout(() => {
-          try {
-            recorder.requestData();
-          } catch {
-            // ignore
-          }
-          if (recorder.state === "recording") {
-            recorder.stop();
-          }
-        }, stopAt);
-      });
-
-      if (blob.size < 5000) {
-        throw new Error("No AI audio captured. Make sure the AI is speaking.");
-      }
-      return blobToBase64(blob);
-    },
-    [sessionStatus, isAudioPlaybackEnabled, getPlaybackStream],
-  );
 
   const computeChapterTargets = useCallback(
     (
@@ -1528,7 +1454,6 @@ Return JSON that includes:
         onClose={() => setIsProfileModalOpen(false)}
         selectedProfiles={selectedProfiles}
         onSelectionChange={setSelectedProfiles}
-        getAIVoiceSampleBase64={recordRemoteAudioSample}
       />
       <SessionSetupModal
         open={isSessionSetupModalOpen}

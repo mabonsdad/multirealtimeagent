@@ -1,7 +1,7 @@
 import { RealtimeAgent } from "@openai/agents/realtime";
 import type { SessionSetupConfig } from "@/app/lib/sessionSetupTypes";
 
-export const DEFAULT_ONBOARDING_VOICE = "alloy";
+export const DEFAULT_ONBOARDING_VOICE = "onyx";
 
 export const DEFAULT_ONBOARDING_INSTRUCTIONS = `
 You are a friendly onboarding host. The goal is to capture a clean user voice sample (30–60s), confirm how to pronounce their name, and gather 2–3 profile facts.

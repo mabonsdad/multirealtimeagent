@@ -300,7 +300,7 @@ const callResponses = async (payload: {
   return res.json();
 };
 
-export const DEFAULT_HOST_VOICE = 'alloy';
+export const DEFAULT_HOST_VOICE = 'onyx';
 
 export const DEFAULT_HOST_VOICE_INSTRUCTIONS = `
 You are the ONLY SPEAKING AGENT in this scenario.
